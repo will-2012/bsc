@@ -655,7 +655,7 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, freezer,
 		case !filepath.IsAbs(freezer):
 			freezer = n.ResolvePath(freezer)
 		}
-		db, err = rawdb.NewLevelDBDatabaseWithFreezer(root, cache, handles, freezer, namespace, readonly, disableFreeze, isLastOffset, pruneAncientData, skipCheckFreezerType)
+		db, err = rawdb.NewKeyValueDatabaseWithFreezer(n.config.DBEngine, root, cache, handles, freezer, namespace, readonly, disableFreeze, isLastOffset, pruneAncientData, skipCheckFreezerType)
 	}
 
 	if err == nil {

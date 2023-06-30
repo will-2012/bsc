@@ -427,6 +427,21 @@ func openKeyValueDatabase(o OpenOptions) (ethdb.Database, error) {
 	}
 }
 
+func NewKeyValueDatabase(dbtype string, file string, cache int, handles int, namespace string, readonly bool) (ethdb.Database, error) {
+	kvdb, err := openKeyValueDatabase(OpenOptions{
+                        Type:      dbtype,
+                        Directory: file,
+                        Namespace: namespace,
+                        Cache:     cache,
+                        Handles:   handles,
+                        ReadOnly:  readonly,
+                     })
+	if err != nil {
+		return nil, err
+	}
+        return kvdb, nil
+}
+
 func NewKeyValueDatabaseWithFreezer(dbtype string, file string, cache int, handles int, freezer string, namespace string, readonly, disableFreeze, isLastOffset, pruneAncientData, skipCheckFreezerType bool) (ethdb.Database, error) {
 	kvdb, err := openKeyValueDatabase(OpenOptions{
                         Type:      dbtype,

@@ -45,6 +45,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/trie/triedb/pathdb"
 )
 
 const (
@@ -232,12 +233,28 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	// and enable transaction propagation.
 	// it was for beacon sync, bsc do not need it.
 	/*
-		success := func(dl *downloader.Downloader) *downloader.Downloader {
-			// If we were running snap sync and it finished, disable doing another
-			// round on next sync cycle
-			if h.snapSync.Load() {
-				log.Info("Snap sync complete, auto disabling")
-				h.snapSync.Store(false)
+	success := func() {
+		// If we were running snap sync and it finished, disable doing another
+		// round on next sync cycle
+		if h.snapSync.Load() {
+			log.Info("Snap sync complete, auto disabling")
+			h.snapSync.Store(false)
+		}
+		// If we've successfully finished a sync cycle, accept transactions from
+		// the network
+		h.enableSyncedFeatures()
+	}
+	// Construct the downloader (long sync)
+	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, nil, h.removePeer, success)
+	if ttd := h.chain.Config().TerminalTotalDifficulty; ttd != nil {
+		if h.chain.Config().TerminalTotalDifficultyPassed {
+			log.Info("Chain post-merge, sync via beacon client")
+		} else {
+			head := h.chain.CurrentBlock()
+			if td := h.chain.GetTd(head.Hash(), head.Number.Uint64()); td.Cmp(ttd) >= 0 {
+				log.Info("Chain post-TTD, sync via beacon client")
+			} else {
+				log.Warn("Chain pre-merge, sync via PoW (ensure beacon client is ready)")
 			}
 			// If we've successfully finished a sync cycle, accept transactions from
 			// the network
@@ -327,7 +344,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 		n, err := h.chain.InsertChain(blocks)
 		if err == nil {
-			h.acceptTxs.Store(true) // Mark initial sync done on any fetcher import
+			h.enableSyncedFeatures() // Mark initial sync done on any fetcher import
 		}
 		return n, err
 	}
@@ -954,5 +971,13 @@ func (h *handler) voteBroadcastLoop() {
 		case <-h.votesSub.Err():
 			return
 		}
+}
+
+// enableSyncedFeatures enables the post-sync functionalities when the initial
+// sync is finished.
+func (h *handler) enableSyncedFeatures() {
+	h.acceptTxs.Store(true)
+	if h.chain.TrieDB().Scheme() == rawdb.PathScheme {
+		h.chain.TrieDB().SetBufferSize(pathdb.DefaultBufferSize)
 	}
 }

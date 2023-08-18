@@ -148,6 +148,8 @@ type StateDB struct {
 	StorageUpdated int
 	AccountDeleted int
 	StorageDeleted int
+
+	mux sync.Mutex
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -1529,17 +1531,17 @@ func (s *StateDB) Commit(failPostCommitFunc func(), postCommitFuncs ...func() er
 							} else {
 								// Merge the dirty nodes of storage trie into global set.
 								if set != nil {
-									nodes.Lock()
+									s.mux.Lock()
 									if err = nodes.Merge(set); err == nil {
 										updates, deleted := set.Size()
 										storageTrieNodesUpdated += updates
 										storageTrieNodesDeleted += deleted
 									} else {
-										nodes.UnLock()
 										taskResults <- err
+										s.mux.Unlock()
 										return
 									}
-									nodes.UnLock()
+									s.mux.Unlock()
 								}
 							}
 						}

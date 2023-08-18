@@ -147,23 +147,23 @@ func New(diskdb ethdb.Database, cleans *fastcache.Cache, config *Config) *Databa
 	// Because the freezer can only be opened once at the same time, this
 	// mechanism also ensures that at most one **non-readOnly** snap database
 	// is opened at the same time to prevent accidental mutation.
-	if ancient, err := diskdb.AncientDatadir(); err == nil && ancient != "" && !db.readOnly {
-		freezer, err := rawdb.NewTrieHistoryFreezer(ancient, false)
-		if err != nil {
-			log.Crit("Failed to open trie history freezer", "err", err)
-		}
-		db.freezer = freezer
-
-		// Truncate the extra trie histories above in freezer in case
-		// it's not aligned with the disk layer.
-		pruned, err := truncateFromHead(freezer, db.tree.bottom().ID())
-		if err != nil {
-			log.Crit("Failed to truncate extra trie histories", "err", err)
-		}
-		if pruned != 0 {
-			log.Info("Truncated extra trie histories", "number", pruned)
-		}
-	}
+	//if ancient, err := diskdb.AncientDatadir(); err == nil && ancient != "" && !db.readOnly {
+	//	freezer, err := rawdb.NewTrieHistoryFreezer(ancient, false)
+	//	if err != nil {
+	//		log.Crit("Failed to open trie history freezer", "err", err)
+	//	}
+	//	db.freezer = freezer
+	//
+	//	// Truncate the extra trie histories above in freezer in case
+	//	// it's not aligned with the disk layer.
+	//	pruned, err := truncateFromHead(freezer, db.tree.bottom().ID())
+	//	if err != nil {
+	//		log.Crit("Failed to truncate extra trie histories", "err", err)
+	//	}
+	//	if pruned != 0 {
+	//		log.Info("Truncated extra trie histories", "number", pruned)
+	//	}
+	//}
 	log.Warn("Path-based trie scheme is an experimental feature")
 	return db
 }

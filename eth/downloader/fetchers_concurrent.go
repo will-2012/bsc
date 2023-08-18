@@ -92,6 +92,11 @@ func (d *Downloader) concurrentFetch(queue typedQueue) error {
 	}()
 	ordering := make(map[*eth.Request]int)
 	timeouts := prque.New[int64, *eth.Request](func(data *eth.Request, index int) {
+		log.Error("Reset bodies req order", "index", index, "req_peer", data.Peer)
+		if index < 0 {
+			delete(ordering, data)
+			return
+		}
 		ordering[data] = index
 	})
 

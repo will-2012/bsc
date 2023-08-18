@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/trie/trienode"
@@ -123,6 +124,7 @@ func (set *NodeSet) Summary() string {
 // MergedNodeSet represents a merged dirty node set for a group of tries.
 type MergedNodeSet struct {
 	sets map[common.Hash]*NodeSet
+	mux  sync.Mutex
 }
 
 // NewMergedNodeSet initializes an empty merged set.
@@ -146,4 +148,12 @@ func (set *MergedNodeSet) Merge(other *NodeSet) error {
 	}
 	set.sets[other.owner] = other
 	return nil
+}
+
+func (set *MergedNodeSet) Lock() {
+	set.mux.Lock()
+}
+
+func (set *MergedNodeSet) UnLock() {
+	set.mux.Lock()
 }

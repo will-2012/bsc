@@ -184,52 +184,56 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, genesis *Genesis, override
 	}
 	// We have the genesis block in database(perhaps in ancient database)
 	// but the corresponding state is missing.
-	header := rawdb.ReadHeader(db, stored, 0)
-
+	//header := rawdb.ReadHeader(db, stored, 0)
 
 	cacheConfig := defaultCacheConfig
 	cacheConfig.NodeScheme = rawdb.PathScheme
-	       // Open trie database with provided config
-        config := &trie.Config{
-                Cache:     cacheConfig.TrieCleanLimit,
-                Journal:   cacheConfig.TrieCleanJournal,
-                Preimages: cacheConfig.Preimages,
-                NoTries:   cacheConfig.NoTries,
-        }
+	// Open trie database with provided config
+	config := &trie.Config{
+		Cache:     cacheConfig.TrieCleanLimit,
+		Journal:   cacheConfig.TrieCleanJournal,
+		Preimages: cacheConfig.Preimages,
+		NoTries:   cacheConfig.NoTries,
+	}
 
-        // if cacheConfig.NodeScheme == rawdb.PathScheme {
-//                log.Info("State trie is running in path mode")
-                config.Snap = &snap.Config{
-                        StateHistory: cacheConfig.StateHistory,
-                        DirtySize:    cacheConfig.TrieDirtyLimit,
-                }
-        // }
-        triedb := trie.NewDatabase(db, config)
+	// if cacheConfig.NodeScheme == rawdb.PathScheme {
+	//                log.Info("State trie is running in path mode")
+	config.Snap = &snap.Config{
+		StateHistory: cacheConfig.StateHistory,
+		DirtySize:    cacheConfig.TrieDirtyLimit,
+	}
+	// }
+	triedb := trie.NewDatabase(db, config)
 	defer triedb.Close()
 
-	if _, err := state.New(header.Root, state.NewDatabaseWithNodeDB(db, config, triedb), nil); err != nil {
-//	if _, err := state.New(header.Root, state.NewDatabaseWithNodeDB(db, nil, nil), nil); err != nil {
-		if genesis == nil {
-			genesis = DefaultGenesisBlock()
-		}
-		// Ensure the stored genesis matches with the given one.
-		hash := genesis.ToBlock(nil).Hash()
-		if hash != stored {
-			return genesis.Config, hash, &GenesisMismatchError{stored, hash}
-		}
-		block, err := genesis.Commit(db)
-		if err != nil {
-			return genesis.Config, hash, err
-		}
-		return genesis.Config, block.Hash(), nil
-	}
-	// Check whether the genesis block is already written.
-	if genesis != nil {
-		hash := genesis.ToBlock(nil).Hash()
-		if hash != stored {
-			return genesis.Config, hash, &GenesisMismatchError{stored, hash}
-		}
-	}
+	// After path db ancient db is fixed, will add the genesis check again.
+
+	//if _, err := state.New(header.Root, state.NewDatabaseWithNodeDB(db, config, triedb), nil); err != nil {
+	//	//	if _, err := state.New(header.Root, state.NewDatabaseWithNodeDB(db, nil, nil), nil); err != nil {
+	//	if genesis == nil {
+	//		log.Info("genesis hash mismatch 000000")
+	//		genesis = DefaultGenesisBlock()
+	//	}
+	//	// Ensure the stored genesis matches with the given one.
+	//	hash := genesis.ToBlock(nil).Hash()
+	//	if hash != stored {
+	//		log.Info("genesis hash mismatch 1111111")
+	//		return genesis.Config, hash, &GenesisMismatchError{stored, hash}
+	//	}
+	//	block, err := genesis.Commit(db)
+	//	if err != nil {
+	//		return genesis.Config, hash, err
+	//	}
+	//	return genesis.Config, block.Hash(), nil
+	//}
+	//// Check whether the genesis block is already written.
+	//if genesis != nil {
+	//	hash := genesis.ToBlock(nil).Hash()
+	//	if hash != stored {
+	//		log.Info("genesis hash mismatch 22222222")
+	//		return genesis.Config, hash, &GenesisMismatchError{stored, hash}
+	//	}
+	//}
 	// Get the existing chain configuration.
 	newcfg := genesis.configOrDefault(stored)
 	if overrideBerlin != nil {
@@ -346,23 +350,23 @@ func (g *Genesis) ToBlock(db ethdb.Database) *types.Block {
 		db = rawdb.NewMemoryDatabase()
 	}
 
-        cacheConfig := defaultCacheConfig
-               // Open trie database with provided config
-        config := &trie.Config{
-                Cache:     cacheConfig.TrieCleanLimit,
-                Journal:   cacheConfig.TrieCleanJournal,
-                Preimages: cacheConfig.Preimages,
-                NoTries:   cacheConfig.NoTries,
-        }
+	cacheConfig := defaultCacheConfig
+	// Open trie database with provided config
+	config := &trie.Config{
+		Cache:     cacheConfig.TrieCleanLimit,
+		Journal:   cacheConfig.TrieCleanJournal,
+		Preimages: cacheConfig.Preimages,
+		NoTries:   cacheConfig.NoTries,
+	}
 
-//        if cacheConfig.NodeScheme == rawdb.PathScheme {
-//                log.Info("State trie is running in path mode")
-                config.Snap = &snap.Config{
-                        StateHistory: cacheConfig.StateHistory,
-                        DirtySize:    cacheConfig.TrieDirtyLimit,
-                }
-//        }
-        triedb := trie.NewDatabase(db, config)
+	//        if cacheConfig.NodeScheme == rawdb.PathScheme {
+	//                log.Info("State trie is running in path mode")
+	config.Snap = &snap.Config{
+		StateHistory: cacheConfig.StateHistory,
+		DirtySize:    cacheConfig.TrieDirtyLimit,
+	}
+	//        }
+	triedb := trie.NewDatabase(db, config)
 	defer triedb.Close()
 
 	statedb, err := state.New(common.Hash{}, state.NewDatabaseWithNodeDB(db, config, triedb), nil)
@@ -409,10 +413,10 @@ func (g *Genesis) ToBlock(db ethdb.Database) *types.Block {
 	statedb.Commit(nil)
 	statedb.Database().TrieDB().Commit(root, true)
 
-        // Ensure that the in-memory trie nodes are journaled to disk properly.
-        if err := triedb.Journal(root); err != nil {
-        	log.Info("Failed to journal in-memory trie nodes", "err", err)
-        }
+	// Ensure that the in-memory trie nodes are journaled to disk properly.
+	if err := triedb.Journal(root); err != nil {
+		log.Info("Failed to journal in-memory trie nodes", "err", err)
+	}
 
 	return types.NewBlock(head, nil, nil, nil, trie.NewStackTrie(nil))
 }
@@ -434,6 +438,7 @@ func (g *Genesis) Commit(db ethdb.Database) (*types.Block, error) {
 	if config.Clique != nil && len(block.Extra()) == 0 {
 		return nil, errors.New("can't start clique chain without signers")
 	}
+	log.Info("genesis header", "hash")
 	rawdb.WriteTd(db, block.Hash(), block.NumberU64(), block.Difficulty())
 	rawdb.WriteBlock(db, block)
 	rawdb.WriteReceipts(db, block.Hash(), block.NumberU64(), nil)

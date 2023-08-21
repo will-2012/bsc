@@ -141,6 +141,8 @@ func New(diskdb ethdb.Database, cleans *fastcache.Cache, config *Config) *Databa
 	// and in-memory layer journal.
 	db.tree = newLayerTree(db.loadSnapshot())
 
+	// After path db ancient db is fixed, will add the genesis check again.
+
 	// Open the freezer for trie history if the passed database contains an
 	// ancient store. Otherwise, all the relevant functionalities are disabled.
 	//

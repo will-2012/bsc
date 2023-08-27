@@ -216,6 +216,9 @@ func truncateFromHead(freezer *rawdb.ResettableFreezer, nhead uint64) (int, erro
 	if err != nil {
 		return 0, err
 	}
+	if ohead <= nhead {
+		return 0, nil
+	}
 	if err := freezer.TruncateHead(nhead); err != nil {
 		return 0, err
 	}
@@ -226,9 +229,16 @@ func truncateFromHead(freezer *rawdb.ResettableFreezer, nhead uint64) (int, erro
 // the given parameters. If the passed database is a non-freezer database,
 // nothing to do here.
 func truncateFromTail(freezer *rawdb.ResettableFreezer, ntail uint64) (int, error) {
+	head, err := freezer.Ancients()
+	if err != nil {
+		return 0, err
+	}
 	otail, err := freezer.Tail()
 	if err != nil {
 		return 0, err
+	}
+	if otail >= ntail || head <= ntail {
+		return 0, nil
 	}
 	if err := freezer.TruncateTail(ntail); err != nil {
 		return 0, err

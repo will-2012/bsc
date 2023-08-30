@@ -369,10 +369,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	if bc.genesisBlock == nil {
 		return nil, ErrNoGenesis
 	}
-
-	bc.highestVerifiedHeader.Store(nil)
-	bc.currentBlock.Store(nil)
-	bc.currentSnapBlock.Store(nil)
+	
+	var nilBlock *types.Header
+	bc.highestVerifiedHeader.Store(nilBlock)
+	bc.currentBlock.Store(nilBlock)
+	bc.currentSnapBlock.Store(nilBlock)
 
 	// If Geth is initialized with an external ancient store, re-initialize the
 	// missing chain indexes and chain flags. This procedure can survive crash

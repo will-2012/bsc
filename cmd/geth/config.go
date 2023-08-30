@@ -142,23 +142,39 @@ func loadBaseConfig(ctx *cli.Context) gethConfig {
 
 // makeConfigNode loads geth configuration and creates a blank node instance.
 func makeConfigNode(ctx *cli.Context) (*node.Node, gethConfig) {
-	cfg := loadBaseConfig(ctx)
-	stack, err := node.New(&cfg.Node)
-	if err != nil {
-		utils.Fatalf("Failed to create the protocol stack: %v", err)
-	}
-	// Node doesn't by default populate account manager backends
-	if err := setAccountManagerBackends(stack.Config(), stack.AccountManager(), stack.KeyStoreDir()); err != nil {
-		utils.Fatalf("Failed to set account manager backends: %v", err)
-	}
+        // Load defaults.
+        cfg := gethConfig{
+                Eth:     ethconfig.Defaults,
+                Node:    defaultNodeConfig(),
+                Metrics: metrics.DefaultConfig,
+        }
 
-	utils.SetEthConfig(ctx, stack, &cfg.Eth)
-	if ctx.IsSet(utils.EthStatsURLFlag.Name) {
-		cfg.Ethstats.URL = ctx.String(utils.EthStatsURLFlag.Name)
-	}
-	applyMetricConfig(ctx, &cfg)
+        // Load config file.
+        if file := ctx.String(configFileFlag.Name); file != "" {
+                if err := loadConfig(file, &cfg); err != nil {
+                        utils.Fatalf("%v", err)
+                }
+        }
 
-	return stack, cfg
+        // Apply flags.
+        utils.SetNodeConfig(ctx, &cfg.Node)
+        stack, err := node.New(&cfg.Node)
+        if err != nil {
+                utils.Fatalf("Failed to create the protocol stack: %v", err)
+        }
+        // Node doesn't by default populate account manager backends
+        if err := setAccountManagerBackends(stack.Config(), stack.AccountManager(), stack.KeyStoreDir()); err != nil {
+        // if err := setAccountManagerBackends(stack); err != nil {
+                utils.Fatalf("Failed to set account manager backends: %v", err)
+        }
+
+        utils.SetEthConfig(ctx, stack, &cfg.Eth)
+        if ctx.IsSet(utils.EthStatsURLFlag.Name) {
+                cfg.Ethstats.URL = ctx.String(utils.EthStatsURLFlag.Name)
+        }
+        applyMetricConfig(ctx, &cfg)
+
+        return stack, cfg
 }
 
 // makeFullNode loads geth configuration and creates the Ethereum backend.

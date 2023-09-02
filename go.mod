@@ -80,7 +80,10 @@ require (
 	gopkg.in/urfave/cli.v1 v1.20.0
 )
 
-require github.com/cockroachdb/pebble v0.0.0-20230209160836-829675f94811
+require (
+	github.com/cockroachdb/pebble v0.0.0-20230821143352-55b44ac08de8
+	golang.org/x/exp v0.0.0-20230206171751-46f607a40771
+)
 
 require (
 	contrib.go.opencensus.io/exporter/jaeger v0.2.1 // indirect
@@ -252,7 +255,6 @@ require (
 	go.uber.org/fx v1.18.2 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
 	go.uber.org/zap v1.24.0 // indirect
-	golang.org/x/exp v0.0.0-20230206171751-46f607a40771 // indirect
 	golang.org/x/mod v0.8.0 // indirect
 	golang.org/x/net v0.7.0 // indirect
 	golang.org/x/oauth2 v0.3.0 // indirect

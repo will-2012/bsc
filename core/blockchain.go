@@ -1222,7 +1222,7 @@ func (bc *BlockChain) Stop() {
 
 	if bc.triedb.Scheme() == rawdb.PathScheme {
 		if err := bc.triedb.Commit(bc.CurrentBlock().Root, true); err != nil {
-			log.Info("Failed to commit header block trie nodes", "root", snapBase.String(), "error", err)
+			log.Info("Failed to commit header block trie nodes", "error", err)
 		} else {
 			log.Info("Succeed to commit header block trie nodes", "root", bc.CurrentBlock().Root.String())
 		}

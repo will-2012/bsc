@@ -24,7 +24,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie/trienode"
-	"github.com/ethereum/go-ethereum/trie/triestate"
 )
 
 type EmptyTrie struct{}
@@ -70,7 +69,7 @@ func (t *EmptyTrie) GetKey(shaKey []byte) []byte {
 	return nil
 }
 
-func (t *EmptyTrie) Commit(onleaf triestate.LeafCallback) (common.Hash, *trienode.NodeSet, error) {
+func (t *EmptyTrie) Commit(collectLeaf bool) (common.Hash, *trienode.NodeSet, error) {
 	return common.Hash{}, nil, nil
 }
 

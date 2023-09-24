@@ -1597,7 +1597,7 @@ func (s *StateDB) Commit(block uint64, failPostCommitFunc func(), postCommitFunc
 			close(finishCh)
 
 			if !s.noTrie {
-				root, set, err := s.trie.Commit(nil)
+				root, set, err := s.trie.Commit(true)
 				if err != nil {
 					return err
 				}

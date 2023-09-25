@@ -81,7 +81,7 @@ require (
 )
 
 require (
-	github.com/cockroachdb/pebble v0.0.0-20230821143352-55b44ac08de8
+	github.com/cockroachdb/pebble v0.0.0-20230906160148-46873a6a7a06
 	golang.org/x/exp v0.0.0-20230206171751-46f607a40771
 )
 

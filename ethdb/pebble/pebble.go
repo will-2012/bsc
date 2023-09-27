@@ -127,22 +127,28 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		handles = minHandles
 	}
 	logger := log.New("database", file)
-	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024+1*1024*1024*1024), "namespace", namespace, "handles", handles)
+	logger.Info("Allocated cache and file handles", "cache",
+		common.StorageSize(cache*1024*1024), "namespace", namespace, "handles", handles)
 
 	// The max memtable size is limited by the uint32 offsets stored in
 	// internal/arenaskl.node, DeferredBatchOp, and flushableBatchEntry.
 	// Taken from https://github.com/cockroachdb/pebble/blob/master/open.go#L38
-	maxMemTableSize := 4<<30 - 1 // Capped by 4 GB
+	//maxMemTableSize := 4<<30 - 1 // Capped by 4 GB
 
 	// Two memory tables is configured which is identical to leveldb,
 	// including a frozen memory table and another live one.
-	memTableLimit := 2
-	memTableSize := cache * 1024 * 1024 / 2 / memTableLimit
-	if memTableSize > maxMemTableSize {
-		memTableSize = maxMemTableSize
-	}
+	memTableLimit := 4
+	/*
+		memTableSize := cache * 1024 * 1024 / 2 / memTableLimit
+		if memTableSize > maxMemTableSize {
+			memTableSize = maxMemTableSize
+		}
 
-	logger.Info("Allocated MemTable size: ", "MemTable size", common.StorageSize(memTableSize), "cache", cache)
+	*/
+	memTableSize := 128 * 1024 * 1024
+
+	logger.Info("Allocated MemTable size: ", "MemTable size",
+		common.StorageSize(memTableSize), "cache", cache)
 	db := &Database{
 		fn:       file,
 		log:      logger,
@@ -153,7 +159,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// Pebble has a single combined cache area and the write
 		// buffers are taken from this too. Assign all available
 		// memory allowance for cache.
-		Cache:        pebble.NewCache(int64(cache*1024*1024) + +1*1024*1024*1024),
+		Cache:        pebble.NewCache(int64(cache * 1024 * 1024)),
 		MaxOpenFiles: handles,
 
 		// The size of memory table(as well as the write buffer).
@@ -174,13 +180,13 @@ func New(file string, cache int, handles int, namespace string, readonly bool) (
 		// Per-level options. Options for at least one level must be specified. The
 		// options for the last level are used for all subsequent levels.
 		Levels: []pebble.LevelOptions{
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
-			{TargetFileSize: 2 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
+			{TargetFileSize: 64 * 1024 * 1024, FilterPolicy: bloom.FilterPolicy(10)},
 		},
 		ReadOnly: readonly,
 		EventListener: &pebble.EventListener{

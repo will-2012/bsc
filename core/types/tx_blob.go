@@ -17,6 +17,10 @@
 package types
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -37,6 +41,10 @@ type BlobTx struct {
 	AccessList AccessList
 	BlobFeeCap *uint256.Int // a.k.a. maxFeePerBlobGas
 	BlobHashes []common.Hash
+
+	// A blob transaction can optionally contain blobs. This field must be set when BlobTx
+	// is used to create a transaction for sigining.
+	Sidecar *BlobTxSidecar `rlp:"-"`
 
 	// Signature values
 	V *uint256.Int `json:"v" gencodec:"required"`
@@ -129,4 +137,105 @@ func (tx *BlobTx) setSignatureValues(chainID, v, r, s *big.Int) {
 	tx.V.SetFromBig(v)
 	tx.R.SetFromBig(r)
 	tx.S.SetFromBig(s)
+}
+
+func (tx *BlobTx) withoutSidecar() *BlobTx {
+	cpy := *tx
+	cpy.Sidecar = nil
+	return &cpy
+}
+
+func (tx *BlobTx) encode(b *bytes.Buffer) error {
+	if tx.Sidecar == nil {
+		return rlp.Encode(b, tx)
+	}
+	inner := &blobTxWithBlobs{
+		BlobTx:      tx,
+		Blobs:       tx.Sidecar.Blobs,
+		Commitments: tx.Sidecar.Commitments,
+		Proofs:      tx.Sidecar.Proofs,
+	}
+	return rlp.Encode(b, inner)
+}
+
+func (tx *BlobTx) decode(input []byte) error {
+	// Here we need to support two formats: the network protocol encoding of the tx (with
+	// blobs) or the canonical encoding without blobs.
+	//
+	// The two encodings can be distinguished by checking whether the first element of the
+	// input list is itself a list.
+
+	outerList, _, err := rlp.SplitList(input)
+	if err != nil {
+		return err
+	}
+	firstElemKind, _, _, err := rlp.Split(outerList)
+	if err != nil {
+		return err
+	}
+
+	if firstElemKind != rlp.List {
+		return rlp.DecodeBytes(input, tx)
+	}
+	// It's a tx with blobs.
+	var inner blobTxWithBlobs
+	if err := rlp.DecodeBytes(input, &inner); err != nil {
+		return err
+	}
+	*tx = *inner.BlobTx
+	tx.Sidecar = &BlobTxSidecar{
+		Blobs:       inner.Blobs,
+		Commitments: inner.Commitments,
+		Proofs:      inner.Proofs,
+	}
+	return nil
+}
+
+// BlobTxSidecar contains the blobs of a blob transaction.
+type BlobTxSidecar struct {
+	Blobs       []kzg4844.Blob       // Blobs needed by the blob pool
+	Commitments []kzg4844.Commitment // Commitments needed by the blob pool
+	Proofs      []kzg4844.Proof      // Proofs needed by the blob pool
+}
+
+// BlobHashes computes the blob hashes of the given blobs.
+func (sc *BlobTxSidecar) BlobHashes() []common.Hash {
+	h := make([]common.Hash, len(sc.Commitments))
+	for i := range sc.Blobs {
+		h[i] = blobHash(&sc.Commitments[i])
+	}
+	return h
+}
+
+// encodedSize computes the RLP size of the sidecar elements. This does NOT return the
+// encoded size of the BlobTxSidecar, it's just a helper for tx.Size().
+func (sc *BlobTxSidecar) encodedSize() uint64 {
+	var blobs, commitments, proofs uint64
+	for i := range sc.Blobs {
+		blobs += rlp.BytesSize(sc.Blobs[i][:])
+	}
+	for i := range sc.Commitments {
+		commitments += rlp.BytesSize(sc.Commitments[i][:])
+	}
+	for i := range sc.Proofs {
+		proofs += rlp.BytesSize(sc.Proofs[i][:])
+	}
+	return rlp.ListSize(blobs) + rlp.ListSize(commitments) + rlp.ListSize(proofs)
+}
+
+// blobTxWithBlobs is used for encoding of transactions when blobs are present.
+type blobTxWithBlobs struct {
+	BlobTx      *BlobTx
+	Blobs       []kzg4844.Blob
+	Commitments []kzg4844.Commitment
+	Proofs      []kzg4844.Proof
+}
+
+func blobHash(commit *kzg4844.Commitment) common.Hash {
+	hasher := sha256.New()
+	hasher.Write(commit[:])
+	var vhash common.Hash
+	hasher.Sum(vhash[:0])
+	vhash[0] = params.BlobTxHashVersion
+	return vhash
 }

@@ -1478,7 +1478,8 @@ func (p *BlobPool) SubscribeTransactions(ch chan<- core.NewTxsEvent) event.Subsc
 // SubscribeReannoTxsEvent registers a subscription of ReannoTxsEvent and
 // starts sending event to the given channel.
 func (pool *BlobPool) SubscribeReannoTxsEvent(ch chan<- core.ReannoTxsEvent) event.Subscription {
-	panic("not supported")
+	//panic("not supported")
+	return nil
 }
 
 // Nonce returns the next nonce of an account, with all transactions executable

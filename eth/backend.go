@@ -156,6 +156,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if config.StateScheme == rawdb.HashScheme {
 		if err := pruner.RecoverPruning(stack.ResolvePath(""), chainDb, config.TriesInMemory); err != nil {
 			log.Error("Failed to recover state", "error", err)
@@ -239,6 +240,16 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		bcOps = append(bcOps, core.EnableDoubleSignChecker)
 	}
 
+	if stack.Config().TrieDir != "" {
+		fmt.Println("trie data dir has setted to ", stack.Config().TrieDir)
+		newChainDb, err := stack.OpenDatabaseForTrie("chaindata", config.DatabaseCache, config.DatabaseHandles,
+			config.DatabaseFreezer, "eth/db/chaindata/", false, false, false, config.PruneAncientData)
+		if err != nil {
+			return nil, err
+		}
+		bcOps = append(bcOps, core.EnableSeparateDB(newChainDb))
+	}
+
 	peers := newPeerSet()
 	bcOps = append(bcOps, core.EnableBlockValidator(chainConfig, eth.engine, config.TriesVerifyMode, peers))
 	// Override the chain config with provided settings.
@@ -249,7 +260,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if config.OverrideVerkle != nil {
 		overrides.OverrideVerkle = config.OverrideVerkle
 	}
-	eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, bcOps...)
+	eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides,
+		eth.engine, vmConfig, eth.shouldPreserve, &config.TransactionHistory, bcOps...)
 	if err != nil {
 		return nil, err
 	}

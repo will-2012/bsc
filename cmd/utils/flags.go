@@ -1664,6 +1664,7 @@ func SetDataDir(ctx *cli.Context, cfg *node.Config) {
 	case ctx.IsSet(DataDirFlag.Name):
 		cfg.DataDir = ctx.String(DataDirFlag.Name)
 	case ctx.IsSet(TrieDirFlag.Name):
+		fmt.Println("setting TrieDirFlag.Name")
 		cfg.TrieDir = ctx.String(TrieDirFlag.Name)
 	case ctx.Bool(DeveloperFlag.Name):
 		cfg.DataDir = "" // unless explicitly requested, use memory databases
@@ -2161,6 +2162,7 @@ func RegisterEthService(stack *node.Node, cfg *ethconfig.Config) (ethapi.Backend
 		stack.RegisterAPIs(tracers.APIs(backend.ApiBackend))
 		return backend.ApiBackend, nil
 	}
+
 	backend, err := eth.New(stack, cfg)
 	if err != nil {
 		Fatalf("Failed to register the Ethereum service: %v", err)

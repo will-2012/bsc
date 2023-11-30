@@ -219,7 +219,7 @@ func initGenesis(ctx *cli.Context) error {
 	// Open and initialise both full and light databases
 	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
-
+	stack.Config().TrieDir = ctx.String(utils.TrieDirFlag.Name)
 	for _, name := range []string{"chaindata", "lightchaindata"} {
 		chaindb, err := stack.OpenDatabaseWithFreezer(name, 0, 0, ctx.String(utils.AncientFlag.Name), "", false, false, false, false)
 		if err != nil {
@@ -232,7 +232,7 @@ func initGenesis(ctx *cli.Context) error {
 		if ctx.IsSet(utils.TrieDirFlag.Name) {
 			newChaindb, dbErr := stack.OpenDatabaseForTrie(name, 0, 0, "", "", false, false, false, false)
 			if dbErr != nil {
-				utils.Fatalf("Failed to open database: %v", err)
+				utils.Fatalf("Failed to open separate trie database: %v", dbErr)
 			}
 			defer newChaindb.Close()
 

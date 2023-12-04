@@ -820,3 +820,117 @@ func ReadChainMetadata(db ethdb.KeyValueStore) [][]string {
 	}
 	return data
 }
+
+func SplitDatabase(db ethdb.Database, trieDB ethdb.Database) error {
+	it := db.NewIterator([]byte(""), []byte(""))
+	defer it.Release()
+
+	var (
+		count  int64
+		start  = time.Now()
+		logged = time.Now()
+
+		// Key-value tire data statistics
+		legacyTries    stat
+		stateLookups   stat
+		accountTries   stat
+		storageTries   stat
+		preimages      stat
+		chtTrieNodes   stat
+		bloomTrieNodes stat
+		// Meta - trie meta
+		metadata stat
+		// Totals
+		total common.StorageSize
+		err   error
+	)
+	// Inspect key-value database first.
+	for it.Next() {
+		var (
+			key   = it.Key()
+			value = it.Value()
+			size  = common.StorageSize(len(key) + len(it.Value()))
+		)
+		total += size
+		switch {
+		case IsLegacyTrieNode(key, it.Value()):
+			legacyTries.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+		case bytes.HasPrefix(key, stateIDPrefix) && len(key) == len(stateIDPrefix)+common.HashLength:
+			stateLookups.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+		case IsAccountTrieNode(key):
+			accountTries.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+		case IsStorageTrieNode(key):
+			storageTries.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+		case bytes.HasPrefix(key, PreimagePrefix) && len(key) == (len(PreimagePrefix)+common.HashLength):
+			preimages.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+
+		case bytes.HasPrefix(key, ChtTablePrefix) ||
+			bytes.HasPrefix(key, ChtIndexTablePrefix) ||
+			bytes.HasPrefix(key, ChtPrefix): // Canonical hash trie
+			chtTrieNodes.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+		case bytes.HasPrefix(key, BloomTrieTablePrefix) ||
+			bytes.HasPrefix(key, BloomTrieIndexPrefix) ||
+			bytes.HasPrefix(key, BloomTriePrefix): // Bloomtrie sub
+			bloomTrieNodes.Add(size)
+			if err = migrateKey(db, trieDB, key, value); err != nil {
+				return err
+			}
+		default:
+			if bytes.Equal(key, fastTrieProgressKey) || bytes.Equal(key, trieJournalKey) || bytes.Equal(key, persistentStateIDKey) {
+				trieDB.Put(key, value)
+			}
+		}
+		count++
+		if count%1000 == 0 && time.Since(logged) > 8*time.Second {
+			log.Info("Migrating trie database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+			logged = time.Now()
+		}
+	}
+	// Display the database statistic of key-value store.
+	stats := [][]string{
+		{"Key-Value store", "Hash trie nodes", legacyTries.Size(), legacyTries.Count()},
+		{"Key-Value store", "Path trie state lookups", stateLookups.Size(), stateLookups.Count()},
+		{"Key-Value store", "Path trie account nodes", accountTries.Size(), accountTries.Count()},
+		{"Key-Value store", "Path trie storage nodes", storageTries.Size(), storageTries.Count()},
+		{"Key-Value store", "Trie preimages", preimages.Size(), preimages.Count()},
+		{"Key-Value store", "Singleton metadata", metadata.Size(), metadata.Count()},
+		{"Light client", "CHT trie nodes", chtTrieNodes.Size(), chtTrieNodes.Count()},
+		{"Light client", "Bloom trie nodes", bloomTrieNodes.Size(), bloomTrieNodes.Count()},
+	}
+
+	table := tablewriter.NewWriter(os.Stdout)
+	table.SetHeader([]string{"Split-Store", "Split-Category", "Size", "Items"})
+	table.SetFooter([]string{"", "Total", total.String(), " "})
+	table.AppendBulk(stats)
+	table.Render()
+
+	return nil
+}
+
+func migrateKey(db ethdb.Database, newDB ethdb.Database, key, value []byte) error {
+	if err := newDB.Put(key, value); err != nil {
+		return err
+	}
+	if err := db.Delete(key); err != nil {
+		return err
+	}
+	return nil
+}

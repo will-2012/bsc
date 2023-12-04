@@ -178,11 +178,7 @@ func makeFullNode(ctx *cli.Context) (*node.Node, ethapi.Backend) {
 		v := ctx.Uint64(utils.OverrideVerkle.Name)
 		cfg.Eth.OverrideVerkle = &v
 	}
-	/*
-		if ctx.IsSet(utils.TrieDirFlag.Name) {
-			stack.Config().TrieDir = ctx.String(utils.TrieDirFlag.Name)
-		}
-	*/
+
 	backend, _ := utils.RegisterEthService(stack, &cfg.Eth)
 
 	// Configure log filter RPC API.

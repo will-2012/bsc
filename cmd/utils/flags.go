@@ -99,7 +99,6 @@ var (
 	TrieDirFlag = &flags.DirectoryFlag{
 		Name:     "triedir",
 		Usage:    "Data directory for the trie data base",
-		Value:    flags.DirectoryString(node.DefaultDataDir() + "trie"),
 		Category: flags.EthCategory,
 	}
 	DirectBroadcastFlag = &cli.BoolFlag{
@@ -1663,11 +1662,11 @@ func SetDataDir(ctx *cli.Context, cfg *node.Config) {
 	switch {
 	case ctx.IsSet(DataDirFlag.Name):
 		cfg.DataDir = ctx.String(DataDirFlag.Name)
-	case ctx.IsSet(TrieDirFlag.Name):
-		fmt.Println("setting TrieDirFlag.Name", ctx.String(TrieDirFlag.Name))
-		cfg.TrieDir = ctx.String(TrieDirFlag.Name)
 	case ctx.Bool(DeveloperFlag.Name):
 		cfg.DataDir = "" // unless explicitly requested, use memory databases
+	}
+	if ctx.IsSet(TrieDirFlag.Name) {
+		cfg.TrieDir = ctx.String(TrieDirFlag.Name)
 	}
 }
 
@@ -2358,6 +2357,20 @@ func MakeChainDatabase(ctx *cli.Context, stack *node.Node, readonly, disableFree
 		Fatalf("Could not open database: %v", err)
 	}
 	return chainDb
+}
+
+func SplitTrieDatabase(ctx *cli.Context, stack *node.Node, readonly, disableFreeze bool) ethdb.Database {
+	var (
+		cache   = ctx.Int(CacheFlag.Name) * ctx.Int(CacheDatabaseFlag.Name) / 100
+		handles = MakeDatabaseHandles(ctx.Int(FDLimitFlag.Name))
+	)
+
+	trieDB, err := stack.OpenDatabaseForTrie("chaindata", cache, handles,
+		ctx.String(AncientFlag.Name), "eth/db/chaindata/", false, false, false, false)
+	if err != nil {
+		Fatalf("Could not open trie database: %v", err)
+	}
+	return trieDB
 }
 
 // tryMakeReadOnlyDatabase try to open the chain database in read-only mode,

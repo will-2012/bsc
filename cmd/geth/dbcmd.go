@@ -76,6 +76,7 @@ Remove blockchain and state databases`,
 			dbHbss2PbssCmd,
 			dbTrieGetCmd,
 			dbTrieDeleteCmd,
+			dbTrieSplitCmd,
 		},
 	}
 	dbInspectCmd = &cli.Command{
@@ -137,6 +138,19 @@ a data corruption.`,
 		},
 		Description: "This command delete the specify trie node from the database.",
 	}
+	dbTrieSplitCmd = &cli.Command{
+		Action:    dbTrieSplit,
+		Name:      "split-trie",
+		ArgsUsage: "",
+		Flags: []cli.Flag{
+			utils.DataDirFlag,
+			utils.TrieDirFlag,
+		},
+		Usage: "Migrate data in the database," +
+			"./geth db split-trie --datadir ./node --triedir ./node2",
+		Description: `This commands iterates the entire database. If the optional 'prefix' and 'start' arguments are provided, then the iteration is limited to the given subset of data.`,
+	}
+
 	dbStatCmd = &cli.Command{
 		Action: dbStats,
 		Name:   "stats",
@@ -600,6 +614,29 @@ func dbTrieDelete(ctx *cli.Context) error {
 			log.Error("args too much")
 		}
 	}
+	return nil
+}
+
+// dbTrieSplit split the trie related data to seprated dir
+func dbTrieSplit(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	db := utils.MakeChainDatabase(ctx, stack, false, false)
+	defer db.Close()
+
+	if stack.Config().TrieDir == "" {
+		return fmt.Errorf("trie dir must be set")
+	}
+
+	seprateDB := utils.SplitTrieDatabase(ctx, stack, false, false)
+	defer seprateDB.Close()
+
+	err := rawdb.SplitDatabase(db, seprateDB)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 

@@ -19,6 +19,8 @@ package rawdb
 import (
 	"encoding/binary"
 
+	"github.com/cometbft/cometbft/types/time"
+	"github.com/ethereum/go-ethereum/cachemetrics"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -74,6 +76,14 @@ func DeleteSnapshotRoot(db ethdb.KeyValueWriter) {
 
 // ReadAccountSnapshot retrieves the snapshot entry of an account trie leaf.
 func ReadAccountSnapshot(db ethdb.KeyValueReader, hash common.Hash) []byte {
+	start := time.Now()
+	routeid := cachemetrics.Goid()
+	defer func() {
+		isSyncMainProcess := cachemetrics.IsSyncMainRoutineID(routeid)
+		if isSyncMainProcess {
+			cachemetrics.RecordCacheMetrics("DISK_SNAP_STORAGE", start)
+		}
+	}()
 	data, _ := db.Get(accountSnapshotKey(hash))
 	return data
 }
@@ -94,6 +104,14 @@ func DeleteAccountSnapshot(db ethdb.KeyValueWriter, hash common.Hash) {
 
 // ReadStorageSnapshot retrieves the snapshot entry of an storage trie leaf.
 func ReadStorageSnapshot(db ethdb.KeyValueReader, accountHash, storageHash common.Hash) []byte {
+	start := time.Now()
+	routeid := cachemetrics.Goid()
+	defer func() {
+		isSyncMainProcess := cachemetrics.IsSyncMainRoutineID(routeid)
+		if isSyncMainProcess {
+			cachemetrics.RecordCacheMetrics("DISK_SNAP_STORAGE", start)
+		}
+	}()
 	data, _ := db.Get(storageSnapshotKey(accountHash, storageHash))
 	return data
 }

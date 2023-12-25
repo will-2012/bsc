@@ -17,6 +17,8 @@ const (
 	CacheL2STORAGE cacheLayerName = "CACHE_L2_STORAGE"
 	CacheL3STORAGE cacheLayerName = "CACHE_L3_STORAGE"
 	DiskL4STORAGE  cacheLayerName = "DISK_L4_STORAGE"
+	DiskTrie       cacheLayerName = "DISK_TRIE_STORAGE"
+	DiskSnapshot   cacheLayerName = "DISK_SNAP_STORAGE"
 )
 
 var (
@@ -28,6 +30,8 @@ var (
 	cacheL2StorageTimer = metrics.NewRegisteredTimer("cache/cost/storage/layer2", nil)
 	cacheL3StorageTimer = metrics.NewRegisteredTimer("cache/cost/storage/layer3", nil)
 	diskL4StorageTimer  = metrics.NewRegisteredTimer("cache/cost/storage/layer4", nil)
+	diskTrieTimer       = metrics.NewRegisteredTimer("cache/cost/storage/trie", nil)
+	diskSnapshotTimer   = metrics.NewRegisteredTimer("cache/cost/storage/snap", nil)
 
 	cacheL1AccountCounter = metrics.NewRegisteredCounter("cache/count/account/layer1", nil)
 	cacheL2AccountCounter = metrics.NewRegisteredCounter("cache/count/account/layer2", nil)
@@ -89,7 +93,10 @@ func RecordCacheMetrics(metricsName cacheLayerName, start time.Time) {
 		recordCost(cacheL3StorageTimer, start)
 	case DiskL4STORAGE:
 		recordCost(diskL4StorageTimer, start)
-
+	case DiskTrie:
+		recordCost(diskTrieTimer, start)
+	case DiskSnapshot:
+		recordCost(diskSnapshotTimer, start)
 	}
 }
 

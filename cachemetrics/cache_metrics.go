@@ -30,7 +30,7 @@ var (
 	cacheL2StorageTimer = metrics.NewRegisteredTimer("cache/cost/storage/layer2", nil)
 	cacheL3StorageTimer = metrics.NewRegisteredTimer("cache/cost/storage/layer3", nil)
 	diskL4StorageTimer  = metrics.NewRegisteredTimer("cache/cost/storage/layer4", nil)
-	diskTrieTimer       = metrics.NewRegisteredTimer("cache/cost/storage/trie", nil)
+	diskTrieTimer       = metrics.NewRegisteredTimer("cache/cost/storage/triedisk", nil)
 	diskSnapshotTimer   = metrics.NewRegisteredTimer("cache/cost/storage/snap", nil)
 
 	cacheL1AccountCounter = metrics.NewRegisteredCounter("cache/count/account/layer1", nil)

@@ -71,12 +71,8 @@ func (h *hasher) release() {
 // hash with the specified node path.
 func ReadAccountTrieNode(db ethdb.KeyValueReader, path []byte) ([]byte, common.Hash) {
 	start := time.Now()
-	routeid := cachemetrics.Goid()
 	defer func() {
-		isSyncMainProcess := cachemetrics.IsSyncMainRoutineID(routeid)
-		if isSyncMainProcess {
-			cachemetrics.RecordCacheMetrics("DISK_TRIE_STORAGE", start)
-		}
+		cachemetrics.RecordCacheMetrics("DISK_TRIE_STORAGE", start)
 	}()
 
 	data, err := db.Get(accountTrieNodeKey(path))
@@ -128,12 +124,8 @@ func DeleteAccountTrieNode(db ethdb.KeyValueWriter, path []byte) {
 // hash with the specified node path.
 func ReadStorageTrieNode(db ethdb.KeyValueReader, accountHash common.Hash, path []byte) ([]byte, common.Hash) {
 	start := time.Now()
-	routeid := cachemetrics.Goid()
 	defer func() {
-		isSyncMainProcess := cachemetrics.IsSyncMainRoutineID(routeid)
-		if isSyncMainProcess {
-			cachemetrics.RecordCacheMetrics("DISK_TRIE_STORAGE", start)
-		}
+		cachemetrics.RecordCacheMetrics("DISK_TRIE_STORAGE", start)
 	}()
 	data, err := db.Get(storageTrieNodeKey(accountHash, path))
 	if err != nil {

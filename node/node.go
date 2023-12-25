@@ -780,6 +780,7 @@ func (n *Node) OpenAndMergeDatabase(name string, cache, handles int, freezer, di
 	chainDataHandles := handles
 	if persistDiff {
 		chainDataHandles = handles * chainDataHandlesPercentage / 100
+		log.Info("persist diff is true", "handler", chainDataHandles)
 	}
 	chainDB, err := n.OpenDatabaseWithFreezer(name, cache, chainDataHandles, freezer, namespace, readonly, false, false, pruneAncientData)
 	if err != nil {
@@ -809,6 +810,10 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient,
 	}
 	var db ethdb.Database
 	var err error
+	var existSeprateDB bool
+	if n.config.trieDir() != "" {
+		existSeprateDB = true
+	}
 	if n.config.DataDir == "" {
 		db = rawdb.NewMemoryDatabase()
 	} else {
@@ -823,6 +828,7 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient,
 			DisableFreeze:     disableFreeze,
 			IsLastOffset:      isLastOffset,
 			PruneAncientData:  pruneAncientData,
+			IsSperateDB:       existSeprateDB,
 		})
 	}
 
@@ -843,11 +849,11 @@ func (n *Node) OpenDatabaseForTrie(name string, cache, handles int, ancient, nam
 	if n.config.DataDir == "" {
 		db = rawdb.NewMemoryDatabase()
 	} else {
-		direcrory := filepath.Join(n.config.trieDir(), name)
+		seprateDir := filepath.Join(n.config.trieDir(), name)
 		db, err = rawdb.Open(rawdb.OpenOptions{
 			Type:              n.config.DBEngine,
-			Directory:         direcrory,
-			AncientsDirectory: filepath.Join(direcrory, "ancient"),
+			Directory:         seprateDir,
+			AncientsDirectory: filepath.Join(seprateDir, "ancient"),
 			Namespace:         namespace,
 			Cache:             cache,
 			Handles:           handles,
@@ -855,6 +861,7 @@ func (n *Node) OpenDatabaseForTrie(name string, cache, handles int, ancient, nam
 			DisableFreeze:     disableFreeze,
 			IsLastOffset:      isLastOffset,
 			PruneAncientData:  pruneAncientData,
+			IsSperateDB:       true,
 		})
 	}
 

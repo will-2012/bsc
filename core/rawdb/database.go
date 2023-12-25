@@ -428,8 +428,8 @@ func NewLevelDBDatabaseWithFreezer(file string, cache int, handles int, ancient 
 
 // NewPebbleDBDatabase creates a persistent key-value database without a freezer
 // moving immutable chain segments into cold storage.
-func NewPebbleDBDatabase(file string, cache int, handles int, namespace string, readonly bool) (ethdb.Database, error) {
-	db, err := pebble.New(file, cache, handles, namespace, readonly)
+func NewPebbleDBDatabase(file string, cache int, handles int, namespace string, readonly bool, seprateDB bool) (ethdb.Database, error) {
+	db, err := pebble.New(file, cache, handles, namespace, readonly, seprateDB)
 	if err != nil {
 		return nil, err
 	}
@@ -471,6 +471,7 @@ type OpenOptions struct {
 	DisableFreeze    bool
 	IsLastOffset     bool
 	PruneAncientData bool
+	IsSperateDB      bool
 }
 
 // openKeyValueDatabase opens a disk-based key-value database, e.g. leveldb or pebble.
@@ -492,7 +493,7 @@ func openKeyValueDatabase(o OpenOptions) (ethdb.Database, error) {
 	}
 	if o.Type == dbPebble || existingDb == dbPebble {
 		log.Info("Using pebble as the backing database")
-		return NewPebbleDBDatabase(o.Directory, o.Cache, o.Handles, o.Namespace, o.ReadOnly)
+		return NewPebbleDBDatabase(o.Directory, o.Cache, o.Handles, o.Namespace, o.ReadOnly, o.IsSperateDB)
 	}
 	if o.Type == dbLeveldb || existingDb == dbLeveldb {
 		log.Info("Using leveldb as the backing database")

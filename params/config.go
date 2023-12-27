@@ -218,7 +218,7 @@ var (
 	}
 
 	RialtoChainConfig = &ChainConfig{
-		ChainID:             big.NewInt(1417),
+		ChainID:             big.NewInt(714),
 		HomesteadBlock:      big.NewInt(0),
 		EIP150Block:         big.NewInt(0),
 		EIP155Block:         big.NewInt(0),
@@ -228,23 +228,26 @@ var (
 		PetersburgBlock:     big.NewInt(0),
 		IstanbulBlock:       big.NewInt(0),
 		MuirGlacierBlock:    big.NewInt(0),
-		RamanujanBlock:      big.NewInt(400),
+		RamanujanBlock:      big.NewInt(0),
 		NielsBlock:          big.NewInt(0),
-		MirrorSyncBlock:     big.NewInt(400),
-		BrunoBlock:          big.NewInt(400),
-		EulerBlock:          big.NewInt(400),
-		GibbsBlock:          big.NewInt(400),
+		MirrorSyncBlock:     big.NewInt(1),
+		BrunoBlock:          big.NewInt(1),
+		EulerBlock:          big.NewInt(2),
+		GibbsBlock:          big.NewInt(3),
 		NanoBlock:           nil,
-		MoranBlock:          nil,
-		PlanckBlock:         nil,
-		LubanBlock:          nil,
-		PlatoBlock:          nil,
-		BerlinBlock:         nil,
-		HertzBlock:          nil,
-		HertzfixBlock:       nil,
+		MoranBlock:          big.NewInt(4),
+		PlanckBlock:         big.NewInt(5),
+		LubanBlock:          big.NewInt(6),
+		PlatoBlock:          big.NewInt(7),
+		BerlinBlock:         big.NewInt(8),
+		LondonBlock:         big.NewInt(8),
+		HertzBlock:          big.NewInt(8),
+		HertzfixBlock:       big.NewInt(8),
 
 		// TODO
-		FeynmanTime: nil,
+		ShanghaiTime: _rialto_upgrade_height_,
+		KeplerTime:   _rialto_upgrade_height_,
+		FeynmanTime:  _rialto_upgrade_height_,
 
 		Parlia: &ParliaConfig{
 			Period: 3,

@@ -861,7 +861,7 @@ func (n *Node) OpenDatabaseForTrie(name string, cache, handles int, ancient, nam
 			DisableFreeze:     disableFreeze,
 			IsLastOffset:      isLastOffset,
 			PruneAncientData:  pruneAncientData,
-			IsSperateDB:       true,
+			IsTrieDB:          true,
 		})
 	}
 

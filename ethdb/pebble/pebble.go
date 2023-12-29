@@ -130,7 +130,7 @@ func (l panicLogger) Fatalf(format string, args ...interface{}) {
 
 // New returns a wrapped pebble DB object. The namespace is the prefix that the
 // metrics reporting should use for surfacing internal stats.
-func New(file string, cache int, handles int, namespace string, readonly bool, seprateDB bool) (*Database, error) {
+func New(file string, cache int, handles int, namespace string, readonly bool, seprateDB bool, isTrie bool) (*Database, error) {
 	// Ensure we have some minimal caching and file guarantees
 	if cache < minCache {
 		cache = minCache
@@ -139,8 +139,12 @@ func New(file string, cache int, handles int, namespace string, readonly bool, s
 		handles = minHandles
 	}
 
-	if seprateDB {
-		handles = handles / 2
+	if seprateDB && !isTrie {
+		handles = int(float64(handles) * 0.4)
+	}
+
+	if !seprateDB && isTrie {
+		handles = int(float64(handles) * 0.6)
 	}
 
 	logger := log.New("database", file)

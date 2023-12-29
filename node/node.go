@@ -810,9 +810,9 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient,
 	}
 	var db ethdb.Database
 	var err error
-	var existSeprateDB bool
+	var isSeprateDB bool
 	if n.config.trieDir() != "" {
-		existSeprateDB = true
+		isSeprateDB = true
 	}
 	if n.config.DataDir == "" {
 		db = rawdb.NewMemoryDatabase()
@@ -828,7 +828,7 @@ func (n *Node) OpenDatabaseWithFreezer(name string, cache, handles int, ancient,
 			DisableFreeze:     disableFreeze,
 			IsLastOffset:      isLastOffset,
 			PruneAncientData:  pruneAncientData,
-			IsSperateDB:       existSeprateDB,
+			IsSperateDB:       isSeprateDB,
 		})
 	}
 

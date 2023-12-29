@@ -140,13 +140,7 @@ func New(file string, cache int, handles int, namespace string, readonly bool, s
 		handles = minHandles
 	}
 
-	if seprateDB && !isTrie {
-		handles = int(float64(handles) * 0.4)
-	}
-
-	if !seprateDB && isTrie {
-		handles = int(float64(handles) * 0.6)
-	}
+	handles = handles / 2
 
 	logger := log.New("database", file)
 

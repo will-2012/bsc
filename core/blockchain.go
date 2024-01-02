@@ -60,7 +60,7 @@ import (
 
 var (
 	badBlockRecords      = mapset.NewSet[common.Hash]()
-	badBlockRecordslimit = 1000
+	badBlockRecordsLimit = 1000
 	badBlockGauge        = metrics.NewRegisteredGauge("chain/insert/badBlock", nil)
 
 	headBlockGauge     = metrics.NewRegisteredGauge("chain/head/block", nil)
@@ -112,7 +112,6 @@ const (
 	maxFutureBlocks     = 256
 	maxTimeFutureBlocks = 30
 	TriesInMemory       = 128
-	maxBeyondBlocks     = 2048
 	prefetchTxNumber    = 100
 
 	diffLayerFreezerRecheckInterval = 3 * time.Second
@@ -120,7 +119,7 @@ const (
 
 	rewindBadBlockInterval = 1 * time.Second
 
-	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
+	// BlockChainVersion ensures that an incompatible database forces re-sync from scratch.
 	//
 	// Changelog:
 	//
@@ -285,10 +284,10 @@ type BlockChain struct {
 	diffQueueBuffer            chan *types.DiffLayer
 	diffLayerFreezerBlockLimit uint64
 
-	wg            sync.WaitGroup //
-	quit          chan struct{}  // shutdown signal, closed in Stop.
-	stopping      atomic.Bool    // false if chain is running, true when stopped
-	procInterrupt atomic.Bool    // interrupt signaler for block processing
+	wg            sync.WaitGroup
+	quit          chan struct{} // shutdown signal, closed in Stop.
+	stopping      atomic.Bool   // false if chain is running, true when stopped
+	procInterrupt atomic.Bool   // interrupt signaler for block processing
 
 	engine     consensus.Engine
 	prefetcher Prefetcher
@@ -329,16 +328,6 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		return nil, genesisErr
 	}
 	log.Info("Initialised chain configuration", "config", chainConfig)
-	// Description of chainConfig is empty now
-	/*
-		log.Info("")
-		log.Info(strings.Repeat("-", 153))
-		for _, line := range strings.Split(chainConfig.Description(), "\n") {
-			log.Info(line)
-		}
-		log.Info(strings.Repeat("-", 153))
-		log.Info("")
-	*/
 
 	bc := &BlockChain{
 		chainConfig:        chainConfig,
@@ -457,7 +446,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			}
 		}
 		if needRewind {
-			log.Error("Truncating ancient chain", "from", bc.CurrentHeader().Number.Uint64(), "to", low)
+			log.Warn("Truncating ancient chain", "from", bc.CurrentHeader().Number.Uint64(), "to", low)
 			if err := bc.SetHead(low); err != nil {
 				return nil, err
 			}
@@ -475,11 +464,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			headerByNumber := bc.GetHeaderByNumber(header.Number.Uint64())
 			// make sure the headerByNumber (if present) is in our current canonical chain
 			if headerByNumber != nil && headerByNumber.Hash() == header.Hash() {
-				log.Error("Found bad hash, rewinding chain", "number", header.Number, "hash", header.ParentHash)
+				log.Warn("Found bad hash, rewinding chain", "number", header.Number, "hash", header.ParentHash)
 				if err := bc.SetHead(header.Number.Uint64() - 1); err != nil {
 					return nil, err
 				}
-				log.Error("Chain rewind was successful, resuming normal operation")
+				log.Warn("Chain rewind was successful, resuming normal operation")
 			}
 		}
 	}
@@ -863,7 +852,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 						beyondRoot, rootNumber = true, newHeadBlock.NumberU64()
 					}
 					if !bc.HasState(newHeadBlock.Root()) && !bc.stateRecoverable(newHeadBlock.Root()) {
-						log.Trace("Block state missing, rewinding further", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash())
+						log.Info("Block state missing, rewinding further", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash())
 						if pivot == nil || newHeadBlock.NumberU64() > *pivot {
 							parent := bc.GetBlock(newHeadBlock.ParentHash(), newHeadBlock.NumberU64()-1)
 							if parent != nil {
@@ -2924,7 +2913,7 @@ func summarizeBadBlock(block *types.Block, receipts []*types.Receipt, config *pa
 		vcs = fmt.Sprintf("\nVCS: %s", vcs)
 	}
 
-	if badBlockRecords.Cardinality() < badBlockRecordslimit {
+	if badBlockRecords.Cardinality() < badBlockRecordsLimit {
 		badBlockRecords.Add(block.Hash())
 		badBlockGauge.Update(int64(badBlockRecords.Cardinality()))
 	}

@@ -195,7 +195,7 @@ var defaultCacheConfig = &CacheConfig{
 	TrieDirtyLimit: 256,
 	TrieTimeLimit:  5 * time.Minute,
 	SnapshotLimit:  256,
-	TriesInMemory:  128,
+	TriesInMemory:  128, // ??
 	SnapshotWait:   true,
 	StateScheme:    rawdb.HashScheme,
 }
@@ -244,8 +244,8 @@ type BlockChain struct {
 	//  * N:   means N block limit [HEAD-N+1, HEAD] and delete extra indexes
 	//  * nil: disable tx reindexer/deleter, but still index new blocks
 	txLookupLimit uint64
-	triesInMemory uint64
 
+	triesInMemory       uint64 // ??
 	hc                  *HeaderChain
 	rmLogsFeed          event.Feed
 	chainFeed           event.Feed
@@ -278,6 +278,7 @@ type BlockChain struct {
 	badBlockCache *lru.Cache[common.Hash, time.Time]
 
 	// trusted diff layers
+	// ??
 	diffLayerCache             *exlru.Cache                          // Cache for the diffLayers
 	diffLayerChanCache         *exlru.Cache                          // Cache for the difflayer channel
 	diffQueue                  *prque.Prque[int64, *types.DiffLayer] // A Priority queue to store recent diff layer
@@ -315,6 +316,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			"triesInMemory", cacheConfig.TriesInMemory)
 	}
 
+	// ??
 	diffLayerCache, _ := exlru.New(diffLayerCacheLimit)
 	diffLayerChanCache, _ := exlru.New(diffLayerCacheLimit)
 
@@ -579,7 +581,7 @@ func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer, diffLayerCh cha
 		return diffLayer.Codes[i].Hash.Hex() < diffLayer.Codes[j].Hash.Hex()
 	})
 	sort.SliceStable(diffLayer.Destructs, func(i, j int) bool {
-		return diffLayer.Destructs[i].Hex() < (diffLayer.Destructs[j].Hex())
+		return diffLayer.Destructs[i].Hex() < diffLayer.Destructs[j].Hex()
 	})
 	sort.SliceStable(diffLayer.Accounts, func(i, j int) bool {
 		return diffLayer.Accounts[i].Account.Hex() < diffLayer.Accounts[j].Account.Hex()
@@ -879,7 +881,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 						log.Info("Rewound to block with state", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash())
 						break
 					}
-					log.Debug("Skipping block with threshold state", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash(), "root", newHeadBlock.Root())
+					log.Info("Skipping block with threshold state", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash(), "root", newHeadBlock.Root())
 					newHeadBlock = bc.GetBlock(newHeadBlock.ParentHash(), newHeadBlock.NumberU64()-1) // Keep rewinding
 				}
 			}
@@ -1193,15 +1195,6 @@ func (bc *BlockChain) Stop() {
 			if snapBase != (common.Hash{}) {
 				log.Info("Writing snapshot state to disk", "root", snapBase)
 				if err := triedb.Commit(snapBase, true); err != nil {
-					log.Error("Failed to commit recent state trie", "err", err)
-				} else {
-					rawdb.WriteSafePointBlockNumber(bc.db, bc.CurrentBlock().Number.Uint64())
-				}
-			}
-
-			if snapBase != (common.Hash{}) {
-				log.Info("Writing snapshot state to disk", "root", snapBase)
-				if err := bc.triedb.Commit(snapBase, true); err != nil {
 					log.Error("Failed to commit recent state trie", "err", err)
 				} else {
 					rawdb.WriteSafePointBlockNumber(bc.db, bc.CurrentBlock().Number.Uint64())

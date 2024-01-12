@@ -159,7 +159,7 @@ type CacheConfig struct {
 	NoTries             bool          // Insecure settings. Do not have any tries in databases if enabled.
 	StateHistory        uint64        // Number of blocks from head whose state histories are reserved.
 	StateScheme         string        // Scheme used to store ethereum states and merkle tree nodes on top
-	PathSyncFlush       bool          // Whether sync flush the trienodebuffer of pathdb to disk.
+	PathSyncFlush       bool          // Whether sync flush the trie node buffer of path db to disk.
 
 	SnapshotNoBuild bool // Whether the background generation is allowed
 	SnapshotWait    bool // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
@@ -180,7 +180,7 @@ func (c *CacheConfig) triedbConfig() *trie.Config {
 	if c.StateScheme == rawdb.PathScheme {
 		config.PathDB = &pathdb.Config{
 			SyncFlush:      c.PathSyncFlush,
-			StateHistory:   c.StateHistory,
+			StateHistory:   c.StateHistory, // ？？truncate ancient db
 			CleanCacheSize: c.TrieCleanLimit * 1024 * 1024,
 			DirtyCacheSize: c.TrieDirtyLimit * 1024 * 1024,
 		}
@@ -278,7 +278,7 @@ type BlockChain struct {
 	badBlockCache *lru.Cache[common.Hash, time.Time]
 
 	// trusted diff layers
-	// ??
+	// ?? lru or exlru??
 	diffLayerCache             *exlru.Cache                          // Cache for the diffLayers
 	diffLayerChanCache         *exlru.Cache                          // Cache for the difflayer channel
 	diffQueue                  *prque.Prque[int64, *types.DiffLayer] // A Priority queue to store recent diff layer
@@ -338,7 +338,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		triedb:             triedb,
 		triegc:             prque.New[int64, common.Hash](nil),
 		quit:               make(chan struct{}),
-		triesInMemory:      cacheConfig.TriesInMemory,
+		triesInMemory:      cacheConfig.TriesInMemory, // ??
 		chainmu:            syncx.NewClosableMutex(),
 		bodyCache:          lru.NewCache[common.Hash, *types.Body](bodyCacheLimit),
 		bodyRLPCache:       lru.NewCache[common.Hash, rlp.RawValue](bodyCacheLimit),
@@ -398,7 +398,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		if bc.triedb.Scheme() == rawdb.PathScheme {
 			recoverable, _ := bc.triedb.Recoverable(diskRoot)
 			if !bc.HasState(diskRoot) && !recoverable {
-				diskRoot = bc.triedb.Head()
+				diskRoot = bc.triedb.Head() // ??
 			}
 		}
 		if diskRoot != (common.Hash{}) {
@@ -410,7 +410,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			}
 			// Chain rewound, persist old snapshot number to indicate recovery procedure
 			if snapDisk != 0 {
-				rawdb.WriteSnapshotRecoveryNumber(bc.db, snapDisk)
+				rawdb.WriteSnapshotRecoveryNumber(bc.db, snapDisk) // write snapshot recover key
 			}
 		} else {
 			log.Warn("Head state missing, repairing", "number", head.Number, "hash", head.Hash())
@@ -484,7 +484,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		var recover bool
 
 		head := bc.CurrentBlock()
-		if layer := rawdb.ReadSnapshotRecoveryNumber(bc.db); layer != nil && *layer >= head.Number.Uint64() {
+		if layer := rawdb.ReadSnapshotRecoveryNumber(bc.db); layer != nil && *layer >= head.Number.Uint64() { // check snapshot recover key
 			log.Warn("Enabling snapshot recovery", "chainhead", head.Number, "diskbase", *layer)
 			recover = true
 		}
@@ -1249,6 +1249,7 @@ func (bc *BlockChain) procFutureBlocks() {
 type WriteStatus byte
 
 const (
+	// what's the meaning of ty??
 	NonStatTy WriteStatus = iota
 	CanonStatTy
 	SideStatTy

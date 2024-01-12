@@ -90,7 +90,7 @@ func New(id *ID, db *Database) (*Trie, error) {
 		tracer: newTracer(),
 	}
 	if id.Root != (common.Hash{}) && id.Root != types.EmptyRootHash {
-		rootnode, err := trie.resolveAndTrack(id.Root[:], nil)
+		rootnode, err := trie.resolveAndTrack(id.Root[:], nil) // TODO
 		if err != nil {
 			return nil, err
 		}

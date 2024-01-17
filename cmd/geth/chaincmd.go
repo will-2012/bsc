@@ -651,7 +651,7 @@ func dump(ctx *cli.Context) error {
 	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
-	conf, db, root, err := parseDumpConfig(ctx, stack)
+	conf, db, root, err := parseDumpConfig(ctx, stack) // ??
 	if err != nil {
 		return err
 	}

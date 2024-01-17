@@ -592,28 +592,55 @@ func exportPreimages(ctx *cli.Context) error {
 }
 
 func parseDumpConfig(ctx *cli.Context, stack *node.Node) (*state.DumpConfig, ethdb.Database, common.Hash, error) {
-	db := utils.MakeChainDatabase(ctx, stack, true, false)
-	var header *types.Header
+	var (
+		dumpConf *state.DumpConfig
+		start    common.Hash
+		header   *types.Header
+	)
 	if ctx.NArg() > 1 {
 		return nil, nil, common.Hash{}, fmt.Errorf("expected 1 argument (number or hash), got %d", ctx.NArg())
 	}
+
+	startArg := common.FromHex(ctx.String(utils.StartKeyFlag.Name))
+	switch len(startArg) {
+	case 0: // common.Hash
+	case 32:
+		start = common.BytesToHash(startArg)
+	case 20:
+		start = crypto.Keccak256Hash(startArg)
+		log.Info("Converting start-address to hash", "address", common.BytesToAddress(startArg), "hash", start.Hex())
+	default:
+		return nil, nil, common.Hash{}, fmt.Errorf("invalid start argument: %x. 20 or 32 hex-encoded bytes required", startArg)
+	}
+	dumpConf = &state.DumpConfig{
+		SkipCode:          ctx.Bool(utils.ExcludeCodeFlag.Name),
+		SkipStorage:       ctx.Bool(utils.ExcludeStorageFlag.Name),
+		OnlyWithAddresses: !ctx.Bool(utils.IncludeIncompletesFlag.Name),
+		Start:             start.Bytes(),
+		Max:               ctx.Uint64(utils.DumpLimitFlag.Name),
+	}
+
+	db := utils.MakeChainDatabase(ctx, stack, true, false)
 	scheme, err := utils.ParseStateScheme(ctx, db)
 	if err != nil {
-		utils.Fatalf("%v", err)
+		return nil, nil, common.Hash{}, fmt.Errorf("failed to parse state scheme due to %v", err)
 	}
 	if scheme == rawdb.PathScheme {
-		triedb := trie.NewDatabase(db, &trie.Config{PathDB: pathdb.Defaults})
+		triedb := trie.NewDatabase(db, &trie.Config{PathDB: pathdb.ReadOnly})
 		if ctx.NArg() == 1 {
 			arg := ctx.Args().First()
 			if hashish(arg) {
 				hash := common.HexToHash(arg)
-				if contain := triedb.ContainDiffLayer(hash); !contain {
-					log.Crit("PBSS doesn't contain specified hash", "hash", arg)
-				}
 				if number := rawdb.ReadHeaderNumber(db, hash); number != nil {
 					header = rawdb.ReadHeader(db, hash, *number)
+					if header == nil {
+						return nil, nil, common.Hash{}, fmt.Errorf("block_number %x header not found", number)
+					}
+					if contain := triedb.ContainDiffLayer(header.Root); !contain {
+						return nil, nil, common.Hash{}, fmt.Errorf("PBSS doesn't contain specified state root %x", header.Root)
+					}
 				} else {
-					return nil, nil, common.Hash{}, fmt.Errorf("block %x not found", hash)
+					return nil, nil, common.Hash{}, fmt.Errorf("block_hash %x not found", hash)
 				}
 			} else {
 				number, err := strconv.ParseUint(arg, 10, 64)
@@ -621,21 +648,23 @@ func parseDumpConfig(ctx *cli.Context, stack *node.Node) (*state.DumpConfig, eth
 					return nil, nil, common.Hash{}, err
 				}
 				if hash := rawdb.ReadCanonicalHash(db, number); hash != (common.Hash{}) {
-					if contain := triedb.ContainDiffLayer(hash); !contain {
-						log.Crit("PBSS doesn't contain specified block number", "number", number)
-					}
 					header = rawdb.ReadHeader(db, hash, number)
+					if header == nil {
+						return nil, nil, common.Hash{}, fmt.Errorf("block_number %x header not found", number)
+					}
+					if contain := triedb.ContainDiffLayer(header.Root); !contain {
+						return nil, nil, common.Hash{}, fmt.Errorf("PBSS doesn't contain specified state root %x", header.Root)
+					}
 				} else {
-					return nil, nil, common.Hash{}, fmt.Errorf("header for block %d not found", number)
+					return nil, nil, common.Hash{}, fmt.Errorf("header for block_number %d not found", number)
 				}
 			}
 		} else {
-			if hash := triedb.Head(); hash != (common.Hash{}) {
-				if number := rawdb.ReadHeaderNumber(db, hash); number != nil {
-					header = rawdb.ReadHeader(db, hash, *number)
-				} else {
-					return nil, nil, common.Hash{}, fmt.Errorf("block %x not found", hash)
-				}
+			if stateRoot := triedb.Head(); stateRoot != (common.Hash{}) {
+				log.Info("State dump configured", "mpt_root", stateRoot,
+					"skipcode", dumpConf.SkipCode, "skipstorage", dumpConf.SkipStorage,
+					"start", hexutil.Encode(dumpConf.Start), "limit", dumpConf.Max)
+				return dumpConf, db, stateRoot, nil
 			} else {
 				return nil, nil, common.Hash{}, fmt.Errorf("no top root hash in path db")
 			}
@@ -648,7 +677,7 @@ func parseDumpConfig(ctx *cli.Context, stack *node.Node) (*state.DumpConfig, eth
 				if number := rawdb.ReadHeaderNumber(db, hash); number != nil {
 					header = rawdb.ReadHeader(db, hash, *number)
 				} else {
-					return nil, nil, common.Hash{}, fmt.Errorf("block %x not found", hash)
+					return nil, nil, common.Hash{}, fmt.Errorf("block_hash %x not found", hash)
 				}
 			} else {
 				number, err := strconv.ParseUint(arg, 10, 64)
@@ -670,29 +699,11 @@ func parseDumpConfig(ctx *cli.Context, stack *node.Node) (*state.DumpConfig, eth
 	if header == nil {
 		return nil, nil, common.Hash{}, errors.New("no head block found")
 	}
-	startArg := common.FromHex(ctx.String(utils.StartKeyFlag.Name))
-	var start common.Hash
-	switch len(startArg) {
-	case 0: // common.Hash
-	case 32:
-		start = common.BytesToHash(startArg)
-	case 20:
-		start = crypto.Keccak256Hash(startArg)
-		log.Info("Converting start-address to hash", "address", common.BytesToAddress(startArg), "hash", start.Hex())
-	default:
-		return nil, nil, common.Hash{}, fmt.Errorf("invalid start argument: %x. 20 or 32 hex-encoded bytes required", startArg)
-	}
-	var conf = &state.DumpConfig{
-		SkipCode:          ctx.Bool(utils.ExcludeCodeFlag.Name),
-		SkipStorage:       ctx.Bool(utils.ExcludeStorageFlag.Name),
-		OnlyWithAddresses: !ctx.Bool(utils.IncludeIncompletesFlag.Name),
-		Start:             start.Bytes(),
-		Max:               ctx.Uint64(utils.DumpLimitFlag.Name),
-	}
+
 	log.Info("State dump configured", "block", header.Number, "hash", header.Hash().Hex(),
-		"skipcode", conf.SkipCode, "skipstorage", conf.SkipStorage,
-		"start", hexutil.Encode(conf.Start), "limit", conf.Max)
-	return conf, db, header.Root, nil
+		"skipcode", dumpConf.SkipCode, "skipstorage", dumpConf.SkipStorage,
+		"start", hexutil.Encode(dumpConf.Start), "limit", dumpConf.Max)
+	return dumpConf, db, header.Root, nil
 }
 
 func dump(ctx *cli.Context) error {

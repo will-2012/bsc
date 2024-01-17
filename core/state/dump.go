@@ -57,7 +57,6 @@ type DumpAccount struct {
 	Storage   map[common.Hash]string `json:"storage,omitempty"`
 	Address   *common.Address        `json:"address,omitempty"` // Address only present in iterative (line-by-line) mode
 	SecureKey hexutil.Bytes          `json:"key,omitempty"`     // If we don't have address, we can output the key
-
 }
 
 // Dump represents the full dump in a collected format, as one large map.
@@ -220,7 +219,7 @@ func (s *StateDB) DumpToCollector(c DumpCollector, conf *DumpConfig) (nextKey []
 	return nextKey
 }
 
-// RawDump returns the entire state an a single large object
+// RawDump returns the entire state a single large object
 func (s *StateDB) RawDump(opts *DumpConfig) Dump {
 	dump := &Dump{
 		Accounts: make(map[common.Address]DumpAccount),

@@ -19,8 +19,9 @@ package trie
 import "github.com/ethereum/go-ethereum/common"
 
 // ID is the identifier for uniquely identifying a trie.
+// StateRoot Root??
 type ID struct {
-	StateRoot common.Hash // The root of the corresponding state(block.root)
+	StateRoot common.Hash // The root of the corresponding state(block.root);
 	Owner     common.Hash // The contract address hash which the trie belongs to
 	Root      common.Hash // The root hash of trie
 }
@@ -36,6 +37,7 @@ func StateTrieID(root common.Hash) *ID {
 
 // StorageTrieID constructs an identifier for storage trie which belongs to a certain
 // state and contract specified by the stateRoot and owner.
+// TODO.
 func StorageTrieID(stateRoot common.Hash, owner common.Hash, root common.Hash) *ID {
 	return &ID{
 		StateRoot: stateRoot,

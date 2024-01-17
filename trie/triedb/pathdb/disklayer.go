@@ -245,7 +245,7 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 		if err != nil {
 			return nil, err
 		}
-		limit := dl.db.config.StateHistory
+		limit := dl.db.config.StateHistory // here??
 		if limit != 0 && bottom.stateID()-tail > limit {
 			overflow = true
 			oldest = bottom.stateID() - limit + 1 // track the id of history **after truncation**

@@ -173,7 +173,7 @@ func (db *Database) Reader(blockRoot common.Hash) (Reader, error) {
 	case *hashdb.Database:
 		return b.Reader(blockRoot)
 	case *pathdb.Database:
-		return b.Reader(blockRoot)
+		return b.Reader(blockRoot) // diff layer or disk layer??
 	}
 	return nil, errors.New("unknown backend")
 }

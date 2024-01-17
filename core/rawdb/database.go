@@ -744,15 +744,15 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		{"Key-Value store", "Transaction index", txLookups.Size(), txLookups.Count()},
 		{"Key-Value store", "Bloombit index", bloomBits.Size(), bloomBits.Count()},
 		{"Key-Value store", "Contract codes", codes.Size(), codes.Count()},
-		{"Key-Value store", "Hash trie nodes", legacyTries.Size(), legacyTries.Count()},
-		{"Key-Value store", "Path trie state lookups", stateLookups.Size(), stateLookups.Count()},
-		{"Key-Value store", "Path trie account nodes", accountTries.Size(), accountTries.Count()},
-		{"Key-Value store", "Path trie storage nodes", storageTries.Size(), storageTries.Count()},
+		{"Key-Value store", "Hash trie nodes", legacyTries.Size(), legacyTries.Count()},           //
+		{"Key-Value store", "Path trie state lookups", stateLookups.Size(), stateLookups.Count()}, //
+		{"Key-Value store", "Path trie account nodes", accountTries.Size(), accountTries.Count()}, //
+		{"Key-Value store", "Path trie storage nodes", storageTries.Size(), storageTries.Count()}, //
 		{"Key-Value store", "Trie preimages", preimages.Size(), preimages.Count()},
 		{"Key-Value store", "Account snapshot", accountSnaps.Size(), accountSnaps.Count()},
 		{"Key-Value store", "Storage snapshot", storageSnaps.Size(), storageSnaps.Count()},
 		{"Key-Value store", "Clique snapshots", cliqueSnaps.Size(), cliqueSnaps.Count()},
-		{"Key-Value store", "Parlia snapshots", parliaSnaps.Size(), parliaSnaps.Count()},
+		{"Key-Value store", "Parlia snapshots", parliaSnaps.Size(), parliaSnaps.Count()}, //
 		{"Key-Value store", "Singleton metadata", metadata.Size(), metadata.Count()},
 		{"Light client", "CHT trie nodes", chtTrieNodes.Size(), chtTrieNodes.Count()},
 		{"Light client", "Bloom trie nodes", bloomTrieNodes.Size(), bloomTrieNodes.Count()},

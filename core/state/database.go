@@ -158,6 +158,7 @@ func NewDatabaseWithConfig(db ethdb.Database, config *trie.Config) Database {
 }
 
 // NewDatabaseWithNodeDB creates a state database with an already initialized node database.
+// why node db?? only is a trie db...
 func NewDatabaseWithNodeDB(db ethdb.Database, triedb *trie.Database) Database {
 	noTries := triedb != nil && triedb.Config() != nil && triedb.Config().NoTries
 
@@ -170,6 +171,8 @@ func NewDatabaseWithNodeDB(db ethdb.Database, triedb *trie.Database) Database {
 	}
 }
 
+var _ Database = &cachingDB{}
+
 type cachingDB struct {
 	disk          ethdb.KeyValueStore
 	codeSizeCache *lru.Cache[common.Hash, int]
@@ -180,7 +183,7 @@ type cachingDB struct {
 
 // OpenTrie opens the main account trie at a specific root hash.
 func (db *cachingDB) OpenTrie(root common.Hash) (Trie, error) {
-	if db.noTries {
+	if db.noTries { // when is no ??
 		return trie.NewEmptyTrie(), nil
 	}
 	tr, err := trie.NewStateTrie(trie.StateTrieID(root), db.triedb)
@@ -208,6 +211,7 @@ func (db *cachingDB) NoTries() bool {
 }
 
 // CopyTrie returns an independent copy of the given trie.
+// It has nothing to do with db??
 func (db *cachingDB) CopyTrie(t Trie) Trie {
 	if t == nil {
 		return nil

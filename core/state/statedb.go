@@ -92,14 +92,14 @@ type StateDB struct {
 	expectedRoot common.Hash // The state root in the block header
 	stateRoot    common.Hash // The calculation result of IntermediateRoot
 
-	fullProcessed bool
+	fullProcessed bool // ??
 	pipeCommit    bool
 
 	// These maps hold the state changes (including the corresponding
 	// original value) that occurred in this **block**.
 	AccountMux     sync.Mutex                                // Mutex for accounts access
 	StorageMux     sync.Mutex                                // Mutex for storages access
-	accounts       map[common.Hash][]byte                    // The mutated accounts in 'slim RLP' encoding
+	accounts       map[common.Hash][]byte                    // The mutated accounts in 'slim RLP' encoding ??
 	storages       map[common.Hash]map[common.Hash][]byte    // The mutated slots in prefix-zero trimmed rlp format
 	accountsOrigin map[common.Address][]byte                 // The original value of mutated accounts in 'slim RLP' encoding
 	storagesOrigin map[common.Address]map[common.Hash][]byte // The original value of mutated slots in prefix-zero trimmed rlp format
@@ -138,11 +138,11 @@ type StateDB struct {
 	accessList *accessList
 
 	// Transient storage
-	transientStorage transientStorage
+	transientStorage transientStorage // ??
 
 	// Journal of state modifications. This is the backbone of
 	// Snapshot and RevertToSnapshot.
-	journal        *journal
+	journal        *journal // ?? rollback word state mpt, how to persist?
 	validRevisions []revision
 	nextRevisionId int
 
@@ -194,10 +194,10 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		stateObjectsDestruct: make(map[common.Address]*types.StateAccount, defaultNumOfSlots),
 		logs:                 make(map[common.Hash][]*types.Log),
 		preimages:            make(map[common.Hash][]byte),
-		journal:              newJournal(),
-		accessList:           newAccessList(),
-		transientStorage:     newTransientStorage(),
-		hasher:               crypto.NewKeccakState(),
+		journal:              newJournal(),            // ??
+		accessList:           newAccessList(),         // ??
+		transientStorage:     newTransientStorage(),   // ??
+		hasher:               crypto.NewKeccakState(), // ??
 	}
 
 	if sdb.snaps != nil {

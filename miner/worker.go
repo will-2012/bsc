@@ -155,7 +155,7 @@ type getWorkReq struct {
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
-	prefetcher  core.Prefetcher
+	prefetcher  core.Prefetcher // ??
 	config      *Config
 	chainConfig *params.ChainConfig
 	engine      consensus.Engine
@@ -677,6 +677,7 @@ func (w *worker) updateSnapshot(env *environment) {
 	w.snapshotMu.Lock()
 	defer w.snapshotMu.Unlock()
 
+	// TODO: ??
 	w.snapshotBlock = types.NewBlock(
 		env.header,
 		env.txs,

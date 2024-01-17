@@ -60,7 +60,7 @@ import (
 
 var (
 	badBlockRecords      = mapset.NewSet[common.Hash]()
-	badBlockRecordslimit = 1000
+	badBlockRecordsLimit = 1000
 	badBlockGauge        = metrics.NewRegisteredGauge("chain/insert/badBlock", nil)
 
 	headBlockGauge     = metrics.NewRegisteredGauge("chain/head/block", nil)
@@ -112,7 +112,6 @@ const (
 	maxFutureBlocks     = 256
 	maxTimeFutureBlocks = 30
 	TriesInMemory       = 128
-	maxBeyondBlocks     = 2048
 	prefetchTxNumber    = 100
 
 	diffLayerFreezerRecheckInterval = 3 * time.Second
@@ -120,7 +119,7 @@ const (
 
 	rewindBadBlockInterval = 1 * time.Second
 
-	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
+	// BlockChainVersion ensures that an incompatible database forces re-sync from scratch.
 	//
 	// Changelog:
 	//
@@ -160,7 +159,7 @@ type CacheConfig struct {
 	NoTries             bool          // Insecure settings. Do not have any tries in databases if enabled.
 	StateHistory        uint64        // Number of blocks from head whose state histories are reserved.
 	StateScheme         string        // Scheme used to store ethereum states and merkle tree nodes on top
-	PathSyncFlush       bool          // Whether sync flush the trienodebuffer of pathdb to disk.
+	PathSyncFlush       bool          // Whether sync flush the trie node buffer of path db to disk.
 
 	SnapshotNoBuild bool // Whether the background generation is allowed
 	SnapshotWait    bool // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
@@ -181,7 +180,7 @@ func (c *CacheConfig) triedbConfig() *trie.Config {
 	if c.StateScheme == rawdb.PathScheme {
 		config.PathDB = &pathdb.Config{
 			SyncFlush:      c.PathSyncFlush,
-			StateHistory:   c.StateHistory,
+			StateHistory:   c.StateHistory, // ？？truncate ancient db
 			CleanCacheSize: c.TrieCleanLimit * 1024 * 1024,
 			DirtyCacheSize: c.TrieDirtyLimit * 1024 * 1024,
 		}
@@ -196,7 +195,7 @@ var defaultCacheConfig = &CacheConfig{
 	TrieDirtyLimit: 256,
 	TrieTimeLimit:  5 * time.Minute,
 	SnapshotLimit:  256,
-	TriesInMemory:  128,
+	TriesInMemory:  128, // ??
 	SnapshotWait:   true,
 	StateScheme:    rawdb.HashScheme,
 }
@@ -245,8 +244,8 @@ type BlockChain struct {
 	//  * N:   means N block limit [HEAD-N+1, HEAD] and delete extra indexes
 	//  * nil: disable tx reindexer/deleter, but still index new blocks
 	txLookupLimit uint64
-	triesInMemory uint64
 
+	triesInMemory       uint64 // ??
 	hc                  *HeaderChain
 	rmLogsFeed          event.Feed
 	chainFeed           event.Feed
@@ -279,16 +278,17 @@ type BlockChain struct {
 	badBlockCache *lru.Cache[common.Hash, time.Time]
 
 	// trusted diff layers
+	// ?? lru or exlru??
 	diffLayerCache             *exlru.Cache                          // Cache for the diffLayers
 	diffLayerChanCache         *exlru.Cache                          // Cache for the difflayer channel
 	diffQueue                  *prque.Prque[int64, *types.DiffLayer] // A Priority queue to store recent diff layer
 	diffQueueBuffer            chan *types.DiffLayer
 	diffLayerFreezerBlockLimit uint64
 
-	wg            sync.WaitGroup //
-	quit          chan struct{}  // shutdown signal, closed in Stop.
-	stopping      atomic.Bool    // false if chain is running, true when stopped
-	procInterrupt atomic.Bool    // interrupt signaler for block processing
+	wg            sync.WaitGroup
+	quit          chan struct{} // shutdown signal, closed in Stop.
+	stopping      atomic.Bool   // false if chain is running, true when stopped
+	procInterrupt atomic.Bool   // interrupt signaler for block processing
 
 	engine     consensus.Engine
 	prefetcher Prefetcher
@@ -316,6 +316,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			"triesInMemory", cacheConfig.TriesInMemory)
 	}
 
+	// ??
 	diffLayerCache, _ := exlru.New(diffLayerCacheLimit)
 	diffLayerChanCache, _ := exlru.New(diffLayerCacheLimit)
 
@@ -329,16 +330,6 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		return nil, genesisErr
 	}
 	log.Info("Initialised chain configuration", "config", chainConfig)
-	// Description of chainConfig is empty now
-	/*
-		log.Info("")
-		log.Info(strings.Repeat("-", 153))
-		for _, line := range strings.Split(chainConfig.Description(), "\n") {
-			log.Info(line)
-		}
-		log.Info(strings.Repeat("-", 153))
-		log.Info("")
-	*/
 
 	bc := &BlockChain{
 		chainConfig:        chainConfig,
@@ -347,7 +338,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		triedb:             triedb,
 		triegc:             prque.New[int64, common.Hash](nil),
 		quit:               make(chan struct{}),
-		triesInMemory:      cacheConfig.TriesInMemory,
+		triesInMemory:      cacheConfig.TriesInMemory, // ??
 		chainmu:            syncx.NewClosableMutex(),
 		bodyCache:          lru.NewCache[common.Hash, *types.Body](bodyCacheLimit),
 		bodyRLPCache:       lru.NewCache[common.Hash, rlp.RawValue](bodyCacheLimit),
@@ -407,7 +398,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		if bc.triedb.Scheme() == rawdb.PathScheme {
 			recoverable, _ := bc.triedb.Recoverable(diskRoot)
 			if !bc.HasState(diskRoot) && !recoverable {
-				diskRoot = bc.triedb.Head()
+				diskRoot = bc.triedb.Head() // ??
 			}
 		}
 		if diskRoot != (common.Hash{}) {
@@ -419,7 +410,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			}
 			// Chain rewound, persist old snapshot number to indicate recovery procedure
 			if snapDisk != 0 {
-				rawdb.WriteSnapshotRecoveryNumber(bc.db, snapDisk)
+				rawdb.WriteSnapshotRecoveryNumber(bc.db, snapDisk) // write snapshot recover key
 			}
 		} else {
 			log.Warn("Head state missing, repairing", "number", head.Number, "hash", head.Hash())
@@ -457,7 +448,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			}
 		}
 		if needRewind {
-			log.Error("Truncating ancient chain", "from", bc.CurrentHeader().Number.Uint64(), "to", low)
+			log.Warn("Truncating ancient chain", "from", bc.CurrentHeader().Number.Uint64(), "to", low)
 			if err := bc.SetHead(low); err != nil {
 				return nil, err
 			}
@@ -475,11 +466,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			headerByNumber := bc.GetHeaderByNumber(header.Number.Uint64())
 			// make sure the headerByNumber (if present) is in our current canonical chain
 			if headerByNumber != nil && headerByNumber.Hash() == header.Hash() {
-				log.Error("Found bad hash, rewinding chain", "number", header.Number, "hash", header.ParentHash)
+				log.Warn("Found bad hash, rewinding chain", "number", header.Number, "hash", header.ParentHash)
 				if err := bc.SetHead(header.Number.Uint64() - 1); err != nil {
 					return nil, err
 				}
-				log.Error("Chain rewind was successful, resuming normal operation")
+				log.Warn("Chain rewind was successful, resuming normal operation")
 			}
 		}
 	}
@@ -493,7 +484,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		var recover bool
 
 		head := bc.CurrentBlock()
-		if layer := rawdb.ReadSnapshotRecoveryNumber(bc.db); layer != nil && *layer >= head.Number.Uint64() {
+		if layer := rawdb.ReadSnapshotRecoveryNumber(bc.db); layer != nil && *layer >= head.Number.Uint64() { // check snapshot recover key
 			log.Warn("Enabling snapshot recovery", "chainhead", head.Number, "diskbase", *layer)
 			recover = true
 		}
@@ -590,7 +581,7 @@ func (bc *BlockChain) cacheDiffLayer(diffLayer *types.DiffLayer, diffLayerCh cha
 		return diffLayer.Codes[i].Hash.Hex() < diffLayer.Codes[j].Hash.Hex()
 	})
 	sort.SliceStable(diffLayer.Destructs, func(i, j int) bool {
-		return diffLayer.Destructs[i].Hex() < (diffLayer.Destructs[j].Hex())
+		return diffLayer.Destructs[i].Hex() < diffLayer.Destructs[j].Hex()
 	})
 	sort.SliceStable(diffLayer.Accounts, func(i, j int) bool {
 		return diffLayer.Accounts[i].Account.Hex() < diffLayer.Accounts[j].Account.Hex()
@@ -863,7 +854,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 						beyondRoot, rootNumber = true, newHeadBlock.NumberU64()
 					}
 					if !bc.HasState(newHeadBlock.Root()) && !bc.stateRecoverable(newHeadBlock.Root()) {
-						log.Trace("Block state missing, rewinding further", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash())
+						log.Info("Block state missing, rewinding further", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash())
 						if pivot == nil || newHeadBlock.NumberU64() > *pivot {
 							parent := bc.GetBlock(newHeadBlock.ParentHash(), newHeadBlock.NumberU64()-1)
 							if parent != nil {
@@ -890,7 +881,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 						log.Info("Rewound to block with state", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash())
 						break
 					}
-					log.Debug("Skipping block with threshold state", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash(), "root", newHeadBlock.Root())
+					log.Info("Skipping block with threshold state", "number", newHeadBlock.NumberU64(), "hash", newHeadBlock.Hash(), "root", newHeadBlock.Root())
 					newHeadBlock = bc.GetBlock(newHeadBlock.ParentHash(), newHeadBlock.NumberU64()-1) // Keep rewinding
 				}
 			}
@@ -1209,15 +1200,6 @@ func (bc *BlockChain) Stop() {
 					rawdb.WriteSafePointBlockNumber(bc.db, bc.CurrentBlock().Number.Uint64())
 				}
 			}
-
-			if snapBase != (common.Hash{}) {
-				log.Info("Writing snapshot state to disk", "root", snapBase)
-				if err := bc.triedb.Commit(snapBase, true); err != nil {
-					log.Error("Failed to commit recent state trie", "err", err)
-				} else {
-					rawdb.WriteSafePointBlockNumber(bc.db, bc.CurrentBlock().Number.Uint64())
-				}
-			}
 			for !bc.triegc.Empty() {
 				triedb.Dereference(bc.triegc.PopItem())
 			}
@@ -1267,6 +1249,7 @@ func (bc *BlockChain) procFutureBlocks() {
 type WriteStatus byte
 
 const (
+	// what's the meaning of ty??
 	NonStatTy WriteStatus = iota
 	CanonStatTy
 	SideStatTy
@@ -2924,7 +2907,7 @@ func summarizeBadBlock(block *types.Block, receipts []*types.Receipt, config *pa
 		vcs = fmt.Sprintf("\nVCS: %s", vcs)
 	}
 
-	if badBlockRecords.Cardinality() < badBlockRecordslimit {
+	if badBlockRecords.Cardinality() < badBlockRecordsLimit {
 		badBlockRecords.Add(block.Hash())
 		badBlockGauge.Update(int64(badBlockRecords.Cardinality()))
 	}

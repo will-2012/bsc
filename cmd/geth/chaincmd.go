@@ -661,6 +661,9 @@ func parseDumpConfig(ctx *cli.Context, stack *node.Node) (*state.DumpConfig, eth
 			}
 		} else {
 			if stateRoot := triedb.Head(); stateRoot != (common.Hash{}) {
+				if contain := triedb.ContainDiffLayer(stateRoot); !contain {
+					return nil, nil, common.Hash{}, fmt.Errorf("PBSS doesn't contain specified state root %x", stateRoot)
+				}
 				log.Info("State dump configured", "mpt_root", stateRoot,
 					"skipcode", dumpConf.SkipCode, "skipstorage", dumpConf.SkipStorage,
 					"start", hexutil.Encode(dumpConf.Start), "limit", dumpConf.Max)

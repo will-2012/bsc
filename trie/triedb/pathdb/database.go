@@ -90,6 +90,9 @@ type layer interface {
 	// This is meant to be used during shutdown to persist the layer without
 	// flattening everything down (bad for reorgs).
 	journal(w io.Writer) error
+
+	// blockNumber returns the associate block number of layer.
+	blockNumber() uint64
 }
 
 // Config contains the settings for database.
@@ -453,7 +456,7 @@ func (db *Database) ContainDiffLayer(root common.Hash) bool {
 		if l.rootHash() == bottom.rootHash() {
 			log.Info("root hash is equal to disk layer root")
 		} else {
-			log.Info("root hash locates in diff layer")
+			log.Info("root hash locates in diff layer", "block_number", l.blockNumber())
 		}
 		return true
 	}

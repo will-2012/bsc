@@ -374,6 +374,11 @@ func (dl *diskLayer) resetCache() {
 	}
 }
 
+// blockNumber returns the associate block number of layer.
+func (dl *diskLayer) blockNumber() uint64 {
+	return 0
+}
+
 // hasher is used to compute the sha256 hash of the provided data.
 type hasher struct{ sha crypto.KeccakState }
 

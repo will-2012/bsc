@@ -172,3 +172,8 @@ func diffToDisk(layer *diffLayer, force bool) (layer, error) {
 	}
 	return disk.commit(layer, force)
 }
+
+// blockNumber returns the associate block number of layer.
+func (dl *diffLayer) blockNumber() uint64 {
+	return dl.block
+}

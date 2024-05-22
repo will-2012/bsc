@@ -1803,6 +1803,11 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 // is imported, but then new canon-head is added before the actual sidechain
 // completes, then the historic state could be pruned again
 func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error) {
+	if chain[0].Number().Int64() > 34000000 {
+		log.Info("Skip import", "block_number", chain[0].Number().Int64(), "len", len(chain))
+		return 0, nil
+	}
+
 	// If the chain is terminating, don't even bother starting up.
 	if bc.insertStopped() {
 		return 0, nil

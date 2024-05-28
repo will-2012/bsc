@@ -441,7 +441,6 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 					diskRoot = bc.triedb.Head()
 				}
 			}
-			diskRoot = common.HexToHash("0x59d2a69ad465dbadf78f99635af9ed8125636cbdedc50bda9668ab2ac677b17a")
 			if diskRoot != (common.Hash{}) {
 				log.Warn("Head state missing, repairing", "number", head.Number, "hash", head.Hash(), "diskRoot", diskRoot)
 
@@ -577,7 +576,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	}
 	// Start tx indexer if it's enabled.
 	if txLookupLimit != nil {
-		// bc.txIndexer = newTxIndexer(*txLookupLimit, bc)
+		bc.txIndexer = newTxIndexer(*txLookupLimit, bc)
 	}
 	return bc, nil
 }

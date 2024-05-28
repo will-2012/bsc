@@ -19,11 +19,13 @@ package rawdb
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -68,6 +70,10 @@ func (h *hasher) release() {
 // ReadAccountTrieNode retrieves the account trie node and the associated node
 // hash with the specified node path.
 func ReadAccountTrieNode(db ethdb.KeyValueReader, path []byte) ([]byte, common.Hash) {
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() { rawdbGetAccountTrieNodeTimer.UpdateSince(start) }()
+	}
 	data, err := db.Get(accountTrieNodeKey(path))
 	if err != nil {
 		return nil, common.Hash{}
@@ -116,6 +122,10 @@ func DeleteAccountTrieNode(db ethdb.KeyValueWriter, path []byte) {
 // ReadStorageTrieNode retrieves the storage trie node and the associated node
 // hash with the specified node path.
 func ReadStorageTrieNode(db ethdb.KeyValueReader, accountHash common.Hash, path []byte) ([]byte, common.Hash) {
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() { rawdbGetStorageTrieNodeTimer.UpdateSince(start) }()
+	}
 	data, err := db.Get(storageTrieNodeKey(accountHash, path))
 	if err != nil {
 		return nil, common.Hash{}
@@ -218,7 +228,22 @@ func HasTrieNode(db ethdb.KeyValueReader, owner common.Hash, path []byte, hash c
 func ReadTrieNode(db ethdb.KeyValueReader, owner common.Hash, path []byte, hash common.Hash, scheme string) []byte {
 	switch scheme {
 	case HashScheme:
-		return ReadLegacyTrieNode(db, hash)
+		var (
+			blob  []byte
+			start time.Time
+		)
+		start = time.Now()
+		blob = ReadLegacyTrieNode(db, hash)
+		if owner == (common.Hash{}) {
+			if metrics.EnabledExpensive {
+				rawdbGetAccountTrieNodeTimer.UpdateSince(start)
+			}
+		} else {
+			if metrics.EnabledExpensive {
+				rawdbGetStorageTrieNodeTimer.UpdateSince(start)
+			}
+		}
+		return blob
 	case PathScheme:
 		var (
 			blob  []byte

@@ -183,8 +183,8 @@ func New(file string, cache int, handles int, namespace string, readonly bool, e
 		memTableSize = maxMemTableSize - 1
 	}
 
-	logger.Info("Allocated cache and file handles", "cache", common.StorageSize(cache*1024*1024),
-		"handles", handles, "memory table", common.StorageSize(memTableSize))
+	logger.Info("Pebble db Allocated cache and file handles", "handles", handles, "block_cache_size", common.StorageSize(cache*1024*1024),
+		"memory_table_size", common.StorageSize(memTableSize))
 
 	db := &Database{
 		fn:           file,
@@ -309,23 +309,69 @@ func (d *Database) Has(key []byte) (bool, error) {
 
 // Get retrieves the given key if it's present in the key-value store.
 func (d *Database) Get(key []byte) ([]byte, error) {
+	var (
+		step1Start time.Time
+		step1End   time.Time
+		step2Start time.Time
+		step2End   time.Time
+		step3Start time.Time
+		step3End   time.Time
+		step4Start time.Time
+		step4End   time.Time
+		keyLen     int
+		valueLen   int
+	)
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() {
+			ethdb.EthdbGetTimer.UpdateSince(start)
+			if time.Now().Sub(start) > 100*time.Millisecond {
+				d.log.Error("perf pebble read",
+					"key", key,
+					"key_len", keyLen,
+					"value_len", valueLen,
+					"step1", common.PrettyDuration(step1End.Sub(step1Start)),
+					"step2", common.PrettyDuration(step2End.Sub(step2Start)),
+					"step3", common.PrettyDuration(step3End.Sub(step3Start)),
+					"step4", common.PrettyDuration(step4End.Sub(step4Start)))
+			}
+		}()
+	}
+	keyLen = len(key)
+	step1Start = time.Now()
 	d.quitLock.RLock()
+	step1End = time.Now()
 	defer d.quitLock.RUnlock()
 	if d.closed {
 		return nil, pebble.ErrClosed
 	}
+	step2Start = time.Now()
+	innerStart := time.Now()
 	dat, closer, err := d.db.Get(key)
+	valueLen = len(dat)
+	ethdb.EthdbInnerGetTimer.UpdateSince(innerStart)
+	step2End = time.Now()
+
 	if err != nil {
 		return nil, err
 	}
+	step3Start = time.Now()
 	ret := make([]byte, len(dat))
 	copy(ret, dat)
+	step3End = time.Now()
+
+	step4Start = time.Now()
 	closer.Close()
+	step4End = time.Now()
 	return ret, nil
 }
 
 // Put inserts the given value into the key-value store.
 func (d *Database) Put(key []byte, value []byte) error {
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() { ethdb.EthdbPutTimer.UpdateSince(start) }()
+	}
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 	if d.closed {
@@ -336,6 +382,10 @@ func (d *Database) Put(key []byte, value []byte) error {
 
 // Delete removes the key from the key-value store.
 func (d *Database) Delete(key []byte) error {
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() { ethdb.EthdbDeleteTimer.UpdateSince(start) }()
+	}
 	d.quitLock.RLock()
 	defer d.quitLock.RUnlock()
 	if d.closed {
@@ -494,6 +544,9 @@ func (d *Database) meter(refresh time.Duration, namespace string) {
 			nonLevel0CompCount = int64(d.nonLevel0Comp.Load())
 			level0CompCount    = int64(d.level0Comp.Load())
 		)
+		fmt.Printf("loop print pebble db stats db_metrics=\n%v\n", stats)
+		d.log.Info("loop print pebble db stats", "comp_time", compTime, "write_delay_count", writeDelayCount, "write_delay_time",
+			writeDelayTime, "non_level0_comp_count", nonLevel0CompCount, "level0_comp_count", level0CompCount)
 		writeDelayTimes[i%2] = writeDelayTime
 		writeDelayCounts[i%2] = writeDelayCount
 		compTimes[i%2] = compTime
@@ -599,6 +652,10 @@ func (b *batch) ValueSize() int {
 
 // Write flushes any accumulated data to disk.
 func (b *batch) Write() error {
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() { ethdb.EthdbBatchWriteTimer.UpdateSince(start) }()
+	}
 	b.db.quitLock.RLock()
 	defer b.db.quitLock.RUnlock()
 	if b.db.closed {

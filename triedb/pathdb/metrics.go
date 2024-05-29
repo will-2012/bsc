@@ -50,4 +50,6 @@ var (
 
 	pathGetDiffLayerTimer = metrics.NewRegisteredTimer("pathdb/get/difflayer/time", nil)
 	pathGetDiskLayerTimer = metrics.NewRegisteredTimer("pathdb/get/disklayer/time", nil)
+	bloomIndexTimer       = metrics.NewRegisteredResettingTimer("pathdb/bloom/index", nil)
+	bloomErrorGauge       = metrics.NewRegisteredGaugeFloat64("pathdb/bloom/error", nil)
 )

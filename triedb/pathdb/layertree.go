@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -195,6 +196,7 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 	}
 	// If the disk layer was modified, regenerate all the cumulative blooms
 	if persisted != nil {
+		start := time.Now()
 		var rebloom func(root common.Hash)
 		rebloom = func(root common.Hash) {
 			if diff, ok := tree.layers[root].(*diffLayer); ok {
@@ -205,6 +207,7 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 			}
 		}
 		rebloom(persisted.root)
+		rebuildBloomIndexTimer.UpdateSince(start)
 	}
 	return nil
 }

@@ -238,29 +238,35 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 	defer dl.lock.RUnlock()
 
 	start := time.Now()
+	hit := dl.selfDiffed.ContainsHash(nodeBloomHash(owner, path))
+	QueryBloomIndexTimer.UpdateSince(start)
 
-	// If the trie node is known locally, return it
-	subset, ok := dl.nodes[owner]
-	if ok {
-		n, ok := subset[string(path)]
+	if hit {
+		start = time.Now()
+		// If the trie node is known locally, return it
+		subset, ok := dl.nodes[owner]
+		pathGetContractDiffLayerTimer.UpdateSince(start)
+		pathDiffLayerContractLenGauge.Update(int64(len(dl.nodes)))
+		pathDiffLayerEOALenGauge.Update(int64(len(subset)))
 		if ok {
-			// If the trie node is not hash matched, or marked as removed,
-			// bubble up an error here. It shouldn't happen at all.
-			if n.Hash != hash {
-				dirtyFalseMeter.Mark(1)
-				log.Error("Unexpected trie node in diff layer", "owner", owner, "path", path, "expect", hash, "got", n.Hash)
-				pathGetDiffLayerTimer.UpdateSince(start)
-				return nil, newUnexpectedNodeError("diff", hash, n.Hash, owner, path, n.Blob)
+			start = time.Now()
+			n, ok := subset[string(path)]
+			pathGetEOADiffLayerTimer.UpdateSince(start)
+			if ok {
+				// If the trie node is not hash matched, or marked as removed,
+				// bubble up an error here. It shouldn't happen at all.
+				if n.Hash != hash {
+					dirtyFalseMeter.Mark(1)
+					log.Error("Unexpected trie node in diff layer", "owner", owner, "path", path, "expect", hash, "got", n.Hash)
+					return nil, newUnexpectedNodeError("diff", hash, n.Hash, owner, path, n.Blob)
+				}
+				dirtyHitMeter.Mark(1)
+				dirtyNodeHitDepthHist.Update(int64(depth))
+				dirtyReadMeter.Mark(int64(len(n.Blob)))
+				return n.Blob, nil
 			}
-			dirtyHitMeter.Mark(1)
-			dirtyNodeHitDepthHist.Update(int64(depth))
-			dirtyReadMeter.Mark(int64(len(n.Blob)))
-			pathGetDiffLayerTimer.UpdateSince(start)
-			return n.Blob, nil
 		}
 	}
-	pathGetDiffLayerTimer.UpdateSince(start)
-
 	// Trie node unknown to this layer, resolve from parent
 	if diff, ok := dl.parent.(*diffLayer); ok {
 		return diff.node(owner, path, hash, depth+1)
@@ -276,7 +282,9 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 	defer dl.lock.RUnlock()
 
 	var origin *diskLayer
+	start := time.Now()
 	hit := dl.diffed.ContainsHash(nodeBloomHash(owner, path))
+	QueryBloomIndexTimer.UpdateSince(start)
 	if !hit {
 		origin = dl.origin // extract origin while holding the lock
 	}

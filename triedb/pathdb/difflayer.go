@@ -85,12 +85,21 @@ func nodeBloomHash(h common.Hash, p []byte) uint64 {
 }
 
 func pathBloomHash(p []byte) uint64 {
-	if len(p) > 8 {
-		panic(fmt.Sprintf("path too long when convert to bloom hash, path_len=%v, path=%v", len(p), p))
+	if len(p)&1 != 0 {
+		panic(fmt.Sprintf("can't convert hex key of odd length, path_len=%v, path=%v", len(p), p))
 	}
-	var arr [8]byte
-	copy(arr[8-len(p):], p)
-	return binary.BigEndian.Uint64(arr[:])<<1 + uint64(len(p))
+	hashLen := len(p) / 2
+	if hashLen > 8 {
+		panic(fmt.Sprintf("hash value too long, hash_len=%v", hashLen))
+	}
+
+	var hashValue uint64
+	for i := 0; i < hashLen; i++ {
+		hashValue <<= 8
+		hashValue |= uint64(p[i*2])<<4 | uint64(p[i*2+1])
+	}
+
+	return (uint64(hashLen) << 32) | (hashValue << 1)
 }
 
 // diffLayer represents a collection of modifications made to the in-memory tries

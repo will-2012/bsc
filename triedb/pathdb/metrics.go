@@ -57,5 +57,8 @@ var (
 	bloomIndexTimer        = metrics.NewRegisteredResettingTimer("pathdb/bloom/index", nil)
 	bloomErrorGauge        = metrics.NewRegisteredGaugeFloat64("pathdb/bloom/error", nil)
 	rebuildBloomIndexTimer = metrics.NewRegisteredResettingTimer("pathdb/rebuild/bloom/time", nil)
-	QueryBloomIndexTimer   = metrics.NewRegisteredResettingTimer("pathdb/query/bloom/time", nil)
+	queryBloomIndexTimer   = metrics.NewRegisteredResettingTimer("pathdb/query/bloom/time", nil)
+
+	layerTreeUpdateTimer    = metrics.NewRegisteredResettingTimer("pathdb/layertree/update/time", nil)
+	layerTreeGetReaderTimer = metrics.NewRegisteredResettingTimer("pathdb/layertree/getreader/time", nil)
 )

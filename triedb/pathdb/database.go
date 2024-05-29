@@ -231,6 +231,12 @@ func New(diskdb ethdb.Database, config *Config) *Database {
 
 // Reader retrieves a layer belonging to the given state root.
 func (db *Database) Reader(root common.Hash) (layer, error) {
+	start := time.Now()
+	defer func() {
+		layerTreeGetReaderTimer.UpdateSince(start)
+		log.Info("Get layer tree reader",
+			"cost", common.PrettyDuration(time.Now().Sub(start)))
+	}()
 	l := db.tree.get(root)
 	if l == nil {
 		return nil, fmt.Errorf("state %#x is not available", root)
@@ -247,6 +253,13 @@ func (db *Database) Reader(root common.Hash) (layer, error) {
 // Therefore, these maps must not be changed afterwards.
 func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint64, nodes *trienode.MergedNodeSet, states *triestate.Set) error {
 	// Hold the lock to prevent concurrent mutations.
+	start := time.Now()
+	defer func() {
+		layerTreeUpdateTimer.UpdateSince(start)
+		log.Info("Update layer tree",
+			"cost", common.PrettyDuration(time.Now().Sub(start)))
+	}()
+
 	db.lock.Lock()
 	defer db.lock.Unlock()
 

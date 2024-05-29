@@ -86,7 +86,7 @@ func nodeBloomHash(h common.Hash, p []byte) uint64 {
 
 func pathBloomHash(p []byte) uint64 {
 	if len(p) > 8 {
-		panic("path too long when convert to bloom hash")
+		panic(fmt.Sprintf("path too long when convert to bloom hash, path_len=%v, path=%v", len(p), p))
 	}
 	var arr [8]byte
 	copy(arr[8-len(p):], p)

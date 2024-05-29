@@ -159,16 +159,19 @@ var (
 		MoranBlock:          big.NewInt(22107423),
 		GibbsBlock:          big.NewInt(23846001),
 		PlanckBlock:         big.NewInt(27281024),
+		LubanBlock:          big.NewInt(29020050),
+		PlatoBlock:          big.NewInt(30720096),
+		BerlinBlock:         big.NewInt(31302048),
+		LondonBlock:         big.NewInt(31302048),
+		HertzBlock:          big.NewInt(31302048),
+		HertzfixBlock:       big.NewInt(34140700),
+		ShanghaiTime:        newUint64(1705996800), // 2024-01-23 08:00:00 AM UTC
+		KeplerTime:          newUint64(1705996800), // 2024-01-23 08:00:00 AM UTC
+		FeynmanTime:         newUint64(1713419340), // 2024-04-18 05:49:00 AM UTC
+		FeynmanFixTime:      newUint64(1713419340), // 2024-04-18 05:49:00 AM UTC
+		CancunTime:          newUint64(1718863500), // 2024-06-20 06:05:00 AM UTC
+		HaberTime:           newUint64(1718863500), // 2024-06-20 06:05:00 AM UTC
 
-		// TODO modify blockNumber, make sure the blockNumber is not an integer multiple of 200 (epoch number)
-		// TODO Caution !!! it should be very careful !!!
-		LubanBlock: big.NewInt(29020050),
-		PlatoBlock: big.NewInt(30720096),
-		// TODO modify blockNumber, make sure HertzBlock=BerlinBlock=LondonBlock to enable Berlin and London EIPs
-		BerlinBlock:   big.NewInt(31302048),
-		LondonBlock:   big.NewInt(31302048),
-		HertzBlock:    big.NewInt(31302048),
-		HertzfixBlock: big.NewInt(34140700),
 		Parlia: &ParliaConfig{
 			Period: 3,
 			Epoch:  200,
@@ -458,11 +461,14 @@ type ChainConfig struct {
 	MergeNetsplitBlock  *big.Int `json:"mergeNetsplitBlock,omitempty"`  // Virtual fork after The Merge to use as a network splitter
 
 	// Fork scheduling was switched from blocks to timestamps here
-
-	ShanghaiTime *uint64 `json:"shanghaiTime,omitempty"  toml:",omitempty"` // Shanghai switch time (nil = no fork, 0 = already on shanghai)
-	CancunTime   *uint64 `json:"cancunTime,omitempty"  toml:",omitempty"`   // Cancun switch time (nil = no fork, 0 = already on cancun)
-	PragueTime   *uint64 `json:"pragueTime,omitempty"  toml:",omitempty"`   // Prague switch time (nil = no fork, 0 = already on prague)
-	VerkleTime   *uint64 `json:"verkleTime,omitempty"  toml:",omitempty"`   // Verkle switch time (nil = no fork, 0 = already on verkle)
+	ShanghaiTime   *uint64 `json:"shanghaiTime,omitempty"`   // Shanghai switch time (nil = no fork, 0 = already on shanghai)
+	KeplerTime     *uint64 `json:"keplerTime,omitempty"`     // Kepler switch time (nil = no fork, 0 = already activated)
+	FeynmanTime    *uint64 `json:"feynmanTime,omitempty"`    // Feynman switch time (nil = no fork, 0 = already activated)
+	FeynmanFixTime *uint64 `json:"feynmanFixTime,omitempty"` // FeynmanFix switch time (nil = no fork, 0 = already activated)
+	CancunTime     *uint64 `json:"cancunTime,omitempty"`     // Cancun switch time (nil = no fork, 0 = already on cancun)
+	HaberTime      *uint64 `json:"haberTime,omitempty"`      // Haber switch time (nil = no fork, 0 = already on haber)
+	PragueTime     *uint64 `json:"pragueTime,omitempty"`     // Prague switch time (nil = no fork, 0 = already on prague)
+	VerkleTime     *uint64 `json:"verkleTime,omitempty"`     // Verkle switch time (nil = no fork, 0 = already on verkle)
 
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.

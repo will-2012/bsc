@@ -79,7 +79,7 @@ type layer interface {
 	// if the read operation exits abnormally. For example, if the layer is already
 	// stale, or the associated state is regarded as corrupted. Notably, no error
 	// will be returned if the requested node is not found in database.
-	Node(owner common.Hash, path []byte, hash common.Hash, args ...interface{}) ([]byte, error)
+	Node(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error)
 
 	// rootHash returns the root hash for which this layer was made.
 	rootHash() common.Hash

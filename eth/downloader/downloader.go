@@ -899,9 +899,7 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		return number, nil
 	}
 	p.log.Warn("failed to found in local", "peer", p.id)
-	// todo: for test
-	return localHeight, nil
-	//return 0, errNoAncestorFound
+	return 0, errNoAncestorFound
 }
 
 func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, remoteHeight uint64, floor int64) (uint64, error) {

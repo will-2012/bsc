@@ -91,7 +91,7 @@ func (q *headerQueue) deliver(peer *peerConnection, packet *eth.Response) (int, 
 	case err == nil:
 		peer.log.Trace("Delivered new batch of headers", "count", len(headers), "accepted", accepted)
 	default:
-		peer.log.Debug("Failed to deliver retrieved headers", "err", err)
+		peer.log.Debug("Failed to deliver retrieved headers", "err", err, "peer", peer.id)
 	}
 	return accepted, err
 }

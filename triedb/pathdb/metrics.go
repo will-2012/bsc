@@ -51,6 +51,10 @@ var (
 	pathGetContractDiffLayerTimer = metrics.NewRegisteredTimer("pathdb/get/contract/difflayer/time", nil)
 	pathGetEOADiffLayerTimer      = metrics.NewRegisteredTimer("pathdb/get/eoa/difflayer/time", nil)
 	pathGetDiskLayerTimer         = metrics.NewRegisteredTimer("pathdb/get/disklayer/time", nil)
+	pathDiskLayerQueryDirtyTimer  = metrics.NewRegisteredTimer("pathdb/disklayer/querydirty/time", nil)
+	pathDiskLayerQueryCleanTimer  = metrics.NewRegisteredTimer("pathdb/disklayer/queryclean/time", nil)
+	pathDiskLayerQueryDBTimer     = metrics.NewRegisteredTimer("pathdb/disklayer/querydb/time", nil)
+
 	pathDiffLayerContractLenGauge = metrics.NewRegisteredGauge("pathdb/difflayer/contract/len", nil)
 	pathDiffLayerEOALenGauge      = metrics.NewRegisteredGauge("pathdb/difflayer/eoa/len", nil)
 

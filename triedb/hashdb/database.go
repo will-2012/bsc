@@ -653,7 +653,7 @@ type reader struct {
 
 // Node retrieves the trie node with the given node hash. No error will be
 // returned if the node is not found.
-func (reader *reader) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
+func (reader *reader) Node(owner common.Hash, path []byte, hash common.Hash, args ...interface{}) ([]byte, error) {
 	blob, _ := reader.db.node(hash)
 	return blob, nil
 }

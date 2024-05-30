@@ -662,6 +662,7 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 	}
 	// Encode the account and update the account trie
 	addr := obj.Address()
+	// ??
 	if err := s.trie.UpdateAccount(addr, &obj.data); err != nil {
 		s.setError(fmt.Errorf("updateStateObject (%x) error: %v", addr[:], err))
 	}
@@ -1146,7 +1147,15 @@ func (s *StateDB) populateSnapStorage(obj *stateObject) bool {
 	return true
 }
 
+var (
+	updateObjectRootTimer = metrics.NewRegisteredTimer("updateobject/root/time", nil)
+)
+
 func (s *StateDB) AccountsIntermediateRoot() {
+	// todo:
+	start := time.Now()
+	defer func() { updateObjectRootTimer.UpdateSince(start) }()
+
 	tasks := make(chan func())
 	finishCh := make(chan struct{})
 	defer close(finishCh)
@@ -1210,6 +1219,7 @@ func (s *StateDB) StateIntermediateRoot() common.Hash {
 		}
 	}
 	if s.trie == nil {
+		// todo: add log/metrics
 		tr, err := s.db.OpenTrie(s.originalRoot)
 		if err != nil {
 			panic(fmt.Sprintf("failed to open trie tree %s", s.originalRoot))
@@ -1219,11 +1229,11 @@ func (s *StateDB) StateIntermediateRoot() common.Hash {
 
 	usedAddrs := make([][]byte, 0, len(s.stateObjectsPending))
 	if !s.noTrie {
-		for addr := range s.stateObjectsPending {
+		for addr := range s.stateObjectsPending { // sequence??
 			if obj := s.stateObjects[addr]; obj.deleted {
 				s.deleteStateObject(obj)
 			} else {
-				s.updateStateObject(obj)
+				s.updateStateObject(obj) // ??
 			}
 			usedAddrs = append(usedAddrs, common.CopyBytes(addr[:])) // Copy needed for closure
 		}

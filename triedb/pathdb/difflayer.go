@@ -231,7 +231,14 @@ func (dl *diffLayer) parentLayer() layer {
 // node retrieves the node with provided node information. It's the internal
 // version of Node function with additional accessed layer tracked. No error
 // will be returned if node is not found.
-func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, depth int) ([]byte, error) {
+func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, depth int, args ...interface{}) ([]byte, error) {
+	startNode := time.Now()
+	defer func() {
+		cost := common.PrettyDuration(time.Now().Sub(startNode))
+		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
+		args = append(args, []interface{}{keyStr, cost}...)
+	}()
+
 	// Hold the lock, ensure the parent won't be changed during the
 	// state accessing.
 	dl.lock.RLock()
@@ -264,30 +271,39 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 
 	// Trie node unknown to this layer, resolve from parent
 	if diff, ok := dl.parent.(*diffLayer); ok {
-		return diff.node(owner, path, hash, depth+1)
+		return diff.node(owner, path, hash, depth+1, args)
 	}
 	// Failed to resolve through diff layers, fallback to disk layer
-	return dl.parent.Node(owner, path, hash)
+	return dl.parent.Node(owner, path, hash, args)
 }
 
 // Node implements the layer interface, retrieving the trie node blob with the
 // provided node information. No error will be returned if the node is not found.
-func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
+func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args ...interface{}) ([]byte, error) {
+	var depth int
+	start := time.Now()
+	defer func() {
+		cost := common.PrettyDuration(time.Now().Sub(start))
+		keyStr := fmt.Sprintf("%d_depth_difflayer_Node", depth)
+		args = append(args, []interface{}{keyStr, cost}...)
+	}()
+
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
 	var origin *diskLayer
-	start := time.Now()
+
+	startQueryFilter := time.Now()
 	hit := dl.diffed.ContainsHash(nodeBloomHash(owner, path))
-	queryBloomIndexTimer.UpdateSince(start)
+	queryBloomIndexTimer.UpdateSince(startQueryFilter)
 	if !hit {
 		origin = dl.origin // extract origin while holding the lock
 	}
 
 	if origin != nil {
-		return origin.Node(owner, path, hash)
+		return origin.Node(owner, path, hash, args)
 	}
-	return dl.node(owner, path, hash, 0)
+	return dl.node(owner, path, hash, depth, args)
 }
 
 // update implements the layer interface, creating a new layer on top of the

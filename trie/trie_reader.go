@@ -17,6 +17,8 @@
 package trie
 
 import (
+	"time"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -66,7 +68,12 @@ func (r *trieReader) node(path []byte, hash common.Hash) ([]byte, error) {
 	if r.reader == nil {
 		return nil, &MissingNodeError{Owner: r.owner, NodeHash: hash, Path: path}
 	}
-	blob, err := r.reader.Node(r.owner, path, hash)
+	start := time.Now()
+	context := []interface{}{}
+	blob, err := r.reader.Node(r.owner, path, hash, context)
+	if time.Now().Sub(start) > 10*time.Millisecond {
+		log.Info("Slow query trie node", context)
+	}
 	if err != nil || len(blob) == 0 {
 		return nil, &MissingNodeError{Owner: r.owner, NodeHash: hash, Path: path, err: err}
 	}

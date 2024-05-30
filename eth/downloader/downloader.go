@@ -786,7 +786,7 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 			localHeight = d.lightchain.CurrentHeader().Number.Uint64()
 		}
 	*/
-	p.log.Debug("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
+	p.log.Debug("Looking for common ancestor", "local", localHeight, "remote", remoteHeight, "peer", p.id)
 
 	// Recap floor value for binary search
 	maxForkAncestry := FullMaxForkAncestry
@@ -839,9 +839,10 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, remoteHeight, localHeight uint64, floor int64) (uint64, error) {
 	from, count, skip, max := calculateRequestSpan(remoteHeight, localHeight)
 
-	p.log.Trace("Span searching for common ancestor", "count", count, "from", from, "skip", skip)
+	p.log.Debug("Span searching for common ancestor", "count", count, "from", from, "skip", skip, "peer", p.id)
 	headers, hashes, err := d.fetchHeadersByNumber(p, uint64(from), count, skip, false)
 	if err != nil {
+		p.log.Warn("failed to fetch header by number", "count", count, "from", from, "skip", skip, "peer", p.id)
 		return 0, err
 	}
 	// Wait for the remote response to the head fetch
@@ -849,14 +850,14 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 
 	// Make sure the peer actually gave something valid
 	if len(headers) == 0 {
-		p.log.Warn("Empty head header set")
+		p.log.Warn("Empty head header set", "peer", p.id)
 		return 0, errEmptyHeaderSet
 	}
 	// Make sure the peer's reply conforms to the request
 	for i, header := range headers {
 		expectNumber := from + int64(i)*int64(skip+1)
 		if number := header.Number.Int64(); number != expectNumber {
-			p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
+			p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number, "peer", p.id)
 			return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 		}
 	}
@@ -883,16 +884,18 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 			number, hash = n, h
 			break
 		}
+		p.log.Debug("failed to found in local", "number", n, "hash", h, "peer", p.id)
 	}
 	// If the head fetch already found an ancestor, return
 	if hash != (common.Hash{}) {
 		if int64(number) <= floor {
-			p.log.Warn("Ancestor below allowance", "number", number, "hash", hash, "allowance", floor)
+			p.log.Warn("Ancestor below allowance", "number", number, "hash", hash, "allowance", floor, "peer", p.id)
 			return 0, errInvalidAncestor
 		}
-		p.log.Debug("Found common ancestor", "number", number, "hash", hash)
+		p.log.Debug("Found common ancestor", "number", number, "hash", hash, "peer", p.id)
 		return number, nil
 	}
+	p.log.Warn("failed to found in local", "peer", p.id)
 	return 0, errNoAncestorFound
 }
 

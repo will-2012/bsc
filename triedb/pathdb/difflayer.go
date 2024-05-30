@@ -271,10 +271,10 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 
 	// Trie node unknown to this layer, resolve from parent
 	if diff, ok := dl.parent.(*diffLayer); ok {
-		return diff.node(owner, path, hash, depth+1, args)
+		return diff.node(owner, path, hash, depth+1, args...)
 	}
 	// Failed to resolve through diff layers, fallback to disk layer
-	return dl.parent.Node(owner, path, hash, args)
+	return dl.parent.Node(owner, path, hash, args...)
 }
 
 // Node implements the layer interface, retrieving the trie node blob with the
@@ -301,9 +301,9 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args
 	}
 
 	if origin != nil {
-		return origin.Node(owner, path, hash, args)
+		return origin.Node(owner, path, hash, args...)
 	}
-	return dl.node(owner, path, hash, depth, args)
+	return dl.node(owner, path, hash, depth, args...)
 }
 
 // update implements the layer interface, creating a new layer on top of the

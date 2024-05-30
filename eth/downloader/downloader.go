@@ -884,7 +884,10 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 			number, hash = n, h
 			break
 		}
-		p.log.Debug("failed to found in local", "number", n, "hash", h, "peer", p.id)
+		p.log.Debug("failed to found in local",
+			"count", count, "from", from, "skip", skip,
+			"number", n, "hash", h, "peer", p.id,
+			"local_head", localHeight, "remote_head", remoteHeight)
 	}
 	// If the head fetch already found an ancestor, return
 	if hash != (common.Hash{}) {
@@ -896,7 +899,9 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		return number, nil
 	}
 	p.log.Warn("failed to found in local", "peer", p.id)
-	return 0, errNoAncestorFound
+	// todo: for test
+	return localHeight, nil
+	//return 0, errNoAncestorFound
 }
 
 func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, remoteHeight uint64, floor int64) (uint64, error) {

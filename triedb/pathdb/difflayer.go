@@ -267,12 +267,16 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		*args = append(*args, []interface{}{keyStr, cost}...)
 		var total_cost time.Duration
 		if step5End.IsZero() {
-			total_cost = step6End.Sub(startNode)
+			if step7End.IsZero() {
+				total_cost = step6End.Sub(startNode)
+			} else {
+				total_cost = step7End.Sub(startNode)
+			}
 		} else {
 			total_cost = step5End.Sub(startNode)
 		}
 		if total_cost > 1*time.Millisecond {
-			*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(step5End.Sub(startNode))}...)
+			*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(total_cost)}...)
 			*args = append(*args, []interface{}{"inner_lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
 			*args = append(*args, []interface{}{"inner_query_contract_map_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
 			*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
@@ -321,6 +325,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 			if n.Hash != hash {
 				dirtyFalseMeter.Mark(1)
 				log.Error("Unexpected trie node in diff layer", "owner", owner, "path", path, "expect", hash, "got", n.Hash)
+				step6End = time.Now()
 				return nil, newUnexpectedNodeError("diff", hash, n.Hash, owner, path, n.Blob)
 			}
 			step7Start = time.Now()

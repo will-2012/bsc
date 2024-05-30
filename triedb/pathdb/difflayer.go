@@ -19,6 +19,7 @@ package pathdb
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand"
 	"sync"
@@ -84,19 +85,28 @@ func nodeBloomHash(h common.Hash, p []byte) uint64 {
 	return binary.BigEndian.Uint64(h[bloomNodeHasherOffset:bloomNodeHasherOffset+8]) ^ pathBloomHash(p)
 }
 
-func pathBloomHash(p []byte) uint64 {
-	if len(p) > 16 {
-		panic("invalid path")
-	}
-	var result uint64
-	for _, nibble := range p {
-		if nibble > 0x0F {
-			panic("invalid path nibble value")
-		}
-		result = (result << 4) | uint64(nibble)
-	}
+//func pathBloomHash(p []byte) uint64 {
+//	if len(p) > 16 {
+//		panic("invalid path")
+//	}
+//	var result uint64
+//	for _, nibble := range p {
+//		if nibble > 0x0F {
+//			panic("invalid path nibble value")
+//		}
+//		result = (result << 4) | uint64(nibble)
+//	}
+//
+//	return uint64(len(p))<<32 + result
+//}
 
-	return uint64(len(p))<<32 + result
+func pathBloomHash(p []byte) uint64 {
+	hasher := fnv.New64a()
+	_, err := hasher.Write(p)
+	if err != nil {
+		panic(err)
+	}
+	return hasher.Sum64()
 }
 
 // diffLayer represents a collection of modifications made to the in-memory tries

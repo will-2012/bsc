@@ -254,6 +254,8 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		step4Start  time.Time
 		step4End    time.Time
 		step5End    time.Time
+		step6Start  time.Time
+		step6End    time.Time
 	)
 	startNode := time.Now()
 	defer func() {
@@ -266,6 +268,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
 		*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
 		*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
+		*args = append(*args, []interface{}{"inner_update_metrics_cost", common.PrettyDuration(step6End.Sub(step6Start))}...)
 		*args = append(*args, []interface{}{"inner_unlock_cost", common.PrettyDuration(step4End.Sub(step4Start))}...)
 	}()
 
@@ -276,7 +279,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 	step1End = time.Now()
 
 	defer func() {
-		step3Start = time.Now()
+		step4Start = time.Now()
 		dl.lock.RUnlock()
 		step4End = time.Now()
 	}()
@@ -285,6 +288,8 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 	// If the trie node is known locally, return it
 	subset, ok := dl.nodes[owner]
 	step2End = time.Now()
+
+	step6Start = time.Now()
 	pathGetContractDiffLayerTimer.Update(step2End.Sub(step2Start))
 	contractLen = int64(len(dl.nodes))
 	pathDiffLayerContractLenGauge.Update(contractLen)
@@ -295,6 +300,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		n, ok := subset[string(path)]
 		step3End = time.Now()
 		pathGetEOADiffLayerTimer.Update(step3End.Sub(step3Start))
+		step6End = time.Now()
 		if ok {
 			// If the trie node is not hash matched, or marked as removed,
 			// bubble up an error here. It shouldn't happen at all.

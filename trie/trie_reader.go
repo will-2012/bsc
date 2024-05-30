@@ -71,7 +71,7 @@ func (r *trieReader) node(path []byte, hash common.Hash) ([]byte, error) {
 	start := time.Now()
 	context := []interface{}{}
 	blob, err := r.reader.Node(r.owner, path, hash, &context)
-	if time.Now().Sub(start) > 10*time.Millisecond {
+	if time.Now().Sub(start) > 50*time.Millisecond {
 		context = append(context, []interface{}{"total_cost", common.PrettyDuration(time.Now().Sub(start))}...)
 		log.Info("Slow query trie node", context...)
 	}

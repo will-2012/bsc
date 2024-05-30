@@ -251,17 +251,22 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		step3Start  time.Time
 		step3End    time.Time
 		trieLen     int64
+		step4Start  time.Time
+		step4End    time.Time
+		step5End    time.Time
 	)
 	startNode := time.Now()
 	defer func() {
 		cost := common.PrettyDuration(time.Now().Sub(startNode))
 		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
 		*args = append(*args, []interface{}{keyStr, cost}...)
+		*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(step5End.Sub(startNode))}...)
 		*args = append(*args, []interface{}{"inner_lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
 		*args = append(*args, []interface{}{"inner_query_contract_map_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
 		*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
 		*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
 		*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
+		*args = append(*args, []interface{}{"inner_unlock_cost", common.PrettyDuration(step4End.Sub(step4Start))}...)
 	}()
 
 	// Hold the lock, ensure the parent won't be changed during the
@@ -269,7 +274,12 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 	step1Start = time.Now()
 	dl.lock.RLock()
 	step1End = time.Now()
-	defer dl.lock.RUnlock()
+
+	defer func() {
+		step3Start = time.Now()
+		dl.lock.RUnlock()
+		step4End = time.Now()
+	}()
 
 	step2Start = time.Now()
 	// If the trie node is known locally, return it
@@ -299,6 +309,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 			return n.Blob, nil
 		}
 	}
+	step5End = time.Now()
 
 	// Trie node unknown to this layer, resolve from parent
 	if diff, ok := dl.parent.(*diffLayer); ok {

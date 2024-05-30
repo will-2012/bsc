@@ -242,28 +242,49 @@ func (dl *diffLayer) parentLayer() layer {
 // version of Node function with additional accessed layer tracked. No error
 // will be returned if node is not found.
 func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, depth int, args *[]interface{}) ([]byte, error) {
+	var (
+		step1Start  time.Time
+		step1End    time.Time
+		step2Start  time.Time
+		step2End    time.Time
+		contractLen int64
+		step3Start  time.Time
+		step3End    time.Time
+		trieLen     int64
+	)
 	startNode := time.Now()
 	defer func() {
 		cost := common.PrettyDuration(time.Now().Sub(startNode))
 		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
 		*args = append(*args, []interface{}{keyStr, cost}...)
+		*args = append(*args, []interface{}{"inner_lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
+		*args = append(*args, []interface{}{"inner_query_contract_map_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
+		*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
+		*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
+		*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
 	}()
 
 	// Hold the lock, ensure the parent won't be changed during the
 	// state accessing.
+	step1Start = time.Now()
 	dl.lock.RLock()
+	step1End = time.Now()
 	defer dl.lock.RUnlock()
 
-	start := time.Now()
+	step2Start = time.Now()
 	// If the trie node is known locally, return it
 	subset, ok := dl.nodes[owner]
-	pathGetContractDiffLayerTimer.UpdateSince(start)
-	pathDiffLayerContractLenGauge.Update(int64(len(dl.nodes)))
-	pathDiffLayerEOALenGauge.Update(int64(len(subset)))
+	step2End = time.Now()
+	pathGetContractDiffLayerTimer.Update(step2End.Sub(step2Start))
+	contractLen = int64(len(dl.nodes))
+	pathDiffLayerContractLenGauge.Update(contractLen)
+	trieLen = int64(len(subset))
+	pathDiffLayerEOALenGauge.Update(trieLen)
 	if ok {
-		start = time.Now()
+		step3Start = time.Now()
 		n, ok := subset[string(path)]
-		pathGetEOADiffLayerTimer.UpdateSince(start)
+		step3End = time.Now()
+		pathGetEOADiffLayerTimer.Update(step3End.Sub(step3Start))
 		if ok {
 			// If the trie node is not hash matched, or marked as removed,
 			// bubble up an error here. It shouldn't happen at all.
@@ -307,7 +328,10 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args
 	hit := dl.diffed.ContainsHash(nodeBloomHash(owner, path))
 	queryBloomIndexTimer.UpdateSince(startQueryFilter)
 	if !hit {
+		missBloomMeter.Mark(1)
 		origin = dl.origin // extract origin while holding the lock
+	} else {
+		hitBloomMeter.Mark(1)
 	}
 
 	if origin != nil {

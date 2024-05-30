@@ -168,9 +168,9 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash, args
 		cost := common.PrettyDuration(time.Now().Sub(startNode))
 		keyStr := fmt.Sprintf("disklayer_node")
 		*args = append(*args, []interface{}{keyStr, cost}...)
-		*args = append(*args, []interface{}{"query_dirty_cache", common.PrettyDuration(step1End.Sub(step1Start))}...)
-		*args = append(*args, []interface{}{"query_clean_cache", common.PrettyDuration(step2End.Sub(step2Start))}...)
-		*args = append(*args, []interface{}{"query_db", common.PrettyDuration(step3End.Sub(step3Start))}...)
+		*args = append(*args, []interface{}{"inner_query_dirty_cache_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
+		*args = append(*args, []interface{}{"inner_query_clean_cache_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
+		*args = append(*args, []interface{}{"inner_query_db_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
 
 		pathDiskLayerQueryDirtyTimer.Update(step1End.Sub(step1Start))
 		pathDiskLayerQueryCleanTimer.Update(step2End.Sub(step2Start))

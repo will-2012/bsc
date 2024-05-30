@@ -266,10 +266,10 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
 		*args = append(*args, []interface{}{keyStr, cost}...)
 		var total_cost time.Duration
-		if step5End.Unix() != 0 {
-			total_cost = step5End.Sub(startNode)
-		} else {
+		if step5End.IsZero() {
 			total_cost = step6End.Sub(startNode)
+		} else {
+			total_cost = step5End.Sub(startNode)
 		}
 		if total_cost > 1*time.Millisecond {
 			*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(step5End.Sub(startNode))}...)
@@ -279,7 +279,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 			*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
 			*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
 			*args = append(*args, []interface{}{"inner_update_metrics_cost1", common.PrettyDuration(step6End.Sub(step6Start))}...)
-			if step7End.Unix() != 0 {
+			if !step7End.IsZero() {
 				*args = append(*args, []interface{}{"inner_update_metrics_cost2", common.PrettyDuration(step7End.Sub(step7Start))}...)
 			}
 			*args = append(*args, []interface{}{"inner_unlock_cost", common.PrettyDuration(step4End.Sub(step4Start))}...)
@@ -304,16 +304,16 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 	step2End = time.Now()
 
 	step6Start = time.Now()
-	pathGetContractDiffLayerTimer.Update(step2End.Sub(step2Start))
+	//pathGetContractDiffLayerTimer.Update(step2End.Sub(step2Start))
 	contractLen = int64(len(dl.nodes))
-	pathDiffLayerContractLenGauge.Update(contractLen)
+	//pathDiffLayerContractLenGauge.Update(contractLen)
 	trieLen = int64(len(subset))
 	pathDiffLayerEOALenGauge.Update(trieLen)
 	if ok {
 		step3Start = time.Now()
 		n, ok := subset[string(path)]
 		step3End = time.Now()
-		pathGetEOADiffLayerTimer.Update(step3End.Sub(step3Start))
+		// pathGetEOADiffLayerTimer.Update(step3End.Sub(step3Start))
 		step6End = time.Now()
 		if ok {
 			// If the trie node is not hash matched, or marked as removed,

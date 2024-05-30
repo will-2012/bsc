@@ -256,20 +256,34 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		step5End    time.Time
 		step6Start  time.Time
 		step6End    time.Time
+		step7Start  time.Time
+		step7End    time.Time
 	)
 	startNode := time.Now()
 	defer func() {
+
 		cost := common.PrettyDuration(time.Now().Sub(startNode))
 		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
 		*args = append(*args, []interface{}{keyStr, cost}...)
-		*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(step5End.Sub(startNode))}...)
-		*args = append(*args, []interface{}{"inner_lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
-		*args = append(*args, []interface{}{"inner_query_contract_map_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
-		*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
-		*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
-		*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
-		*args = append(*args, []interface{}{"inner_update_metrics_cost", common.PrettyDuration(step6End.Sub(step6Start))}...)
-		*args = append(*args, []interface{}{"inner_unlock_cost", common.PrettyDuration(step4End.Sub(step4Start))}...)
+		var total_cost time.Duration
+		if step5End.Unix() != 0 {
+			total_cost = step5End.Sub(startNode)
+		} else {
+			total_cost = step6End.Sub(startNode)
+		}
+		if total_cost > 1*time.Millisecond {
+			*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(step5End.Sub(startNode))}...)
+			*args = append(*args, []interface{}{"inner_lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
+			*args = append(*args, []interface{}{"inner_query_contract_map_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
+			*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
+			*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
+			*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
+			*args = append(*args, []interface{}{"inner_update_metrics_cost1", common.PrettyDuration(step6End.Sub(step6Start))}...)
+			if step7End.Unix() != 0 {
+				*args = append(*args, []interface{}{"inner_update_metrics_cost2", common.PrettyDuration(step7End.Sub(step7Start))}...)
+			}
+			*args = append(*args, []interface{}{"inner_unlock_cost", common.PrettyDuration(step4End.Sub(step4Start))}...)
+		}
 	}()
 
 	// Hold the lock, ensure the parent won't be changed during the
@@ -309,9 +323,11 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 				log.Error("Unexpected trie node in diff layer", "owner", owner, "path", path, "expect", hash, "got", n.Hash)
 				return nil, newUnexpectedNodeError("diff", hash, n.Hash, owner, path, n.Blob)
 			}
+			step7Start = time.Now()
 			dirtyHitMeter.Mark(1)
 			dirtyNodeHitDepthHist.Update(int64(depth))
 			dirtyReadMeter.Mark(int64(len(n.Blob)))
+			step7End = time.Now()
 			return n.Blob, nil
 		}
 	}

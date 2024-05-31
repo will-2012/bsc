@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
@@ -27,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/trie/triestate"
 	"golang.org/x/crypto/sha3"
@@ -152,9 +154,35 @@ func (dl *diskLayer) markStale() {
 
 // Node implements the layer interface, retrieving the trie node with the
 // provided node info. No error will be returned if the node is not found.
-func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
+func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error) {
+	var (
+		step1Start time.Time
+		step1End   time.Time
+		step2Start time.Time
+		step2End   time.Time
+		step3Start time.Time
+		step3End   time.Time
+	)
+	startNode := time.Now()
+	defer func() {
+		cost := common.PrettyDuration(time.Now().Sub(startNode))
+		keyStr := fmt.Sprintf("disklayer_node")
+		*args = append(*args, []interface{}{keyStr, cost}...)
+		*args = append(*args, []interface{}{"inner_query_dirty_cache_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
+		*args = append(*args, []interface{}{"inner_query_clean_cache_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
+		*args = append(*args, []interface{}{"inner_query_db_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
+
+		pathDiskLayerQueryDirtyTimer.Update(step1End.Sub(step1Start))
+		pathDiskLayerQueryCleanTimer.Update(step2End.Sub(step2Start))
+		pathDiskLayerQueryDBTimer.Update(step3End.Sub(step3Start))
+	}()
+
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
+	if metrics.EnabledExpensive {
+		start := time.Now()
+		defer func() { pathGetDiskLayerTimer.UpdateSince(start) }()
+	}
 
 	if dl.stale {
 		return nil, errSnapshotStale
@@ -163,7 +191,9 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 	// node buffer first. Note the buffer is lock free since
 	// it's impossible to mutate the buffer before tagging the
 	// layer as stale.
+	step1Start = time.Now()
 	n, err := dl.buffer.node(owner, path, hash)
+	step1End = time.Now()
 	if err != nil {
 		return nil, err
 	}
@@ -174,6 +204,7 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 	}
 	dirtyMissMeter.Mark(1)
 
+	step2Start = time.Now()
 	// Try to retrieve the trie node from the clean memory cache
 	key := cacheKey(owner, path)
 	if dl.cleans != nil {
@@ -192,6 +223,10 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 		}
 		cleanMissMeter.Mark(1)
 	}
+	step2End = time.Now()
+
+	step3Start = time.Now()
+
 	// Try to retrieve the trie node from the disk.
 	var (
 		nBlob []byte
@@ -211,6 +246,8 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 		dl.cleans.Set(key, nBlob)
 		cleanWriteMeter.Mark(int64(len(nBlob)))
 	}
+	step3End = time.Now()
+
 	return nBlob, nil
 }
 

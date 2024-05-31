@@ -47,4 +47,24 @@ var (
 	historyBuildTimeMeter  = metrics.NewRegisteredTimer("pathdb/history/time", nil)
 	historyDataBytesMeter  = metrics.NewRegisteredMeter("pathdb/history/bytes/data", nil)
 	historyIndexBytesMeter = metrics.NewRegisteredMeter("pathdb/history/bytes/index", nil)
+
+	pathGetContractDiffLayerTimer = metrics.NewRegisteredTimer("pathdb/get/contract/difflayer/time", nil)
+	pathGetEOADiffLayerTimer      = metrics.NewRegisteredTimer("pathdb/get/eoa/difflayer/time", nil)
+	pathGetDiskLayerTimer         = metrics.NewRegisteredTimer("pathdb/get/disklayer/time", nil)
+	pathDiskLayerQueryDirtyTimer  = metrics.NewRegisteredTimer("pathdb/disklayer/querydirty/time", nil)
+	pathDiskLayerQueryCleanTimer  = metrics.NewRegisteredTimer("pathdb/disklayer/queryclean/time", nil)
+	pathDiskLayerQueryDBTimer     = metrics.NewRegisteredTimer("pathdb/disklayer/querydb/time", nil)
+
+	pathDiffLayerContractLenGauge = metrics.NewRegisteredGauge("pathdb/difflayer/contract/len", nil)
+	pathDiffLayerEOALenGauge      = metrics.NewRegisteredGauge("pathdb/difflayer/eoa/len", nil)
+
+	bloomIndexTimer        = metrics.NewRegisteredResettingTimer("pathdb/bloom/index", nil)
+	bloomErrorGauge        = metrics.NewRegisteredGaugeFloat64("pathdb/bloom/error", nil)
+	rebuildBloomIndexTimer = metrics.NewRegisteredResettingTimer("pathdb/rebuild/bloom/time", nil)
+	queryBloomIndexTimer   = metrics.NewRegisteredResettingTimer("pathdb/query/bloom/time", nil)
+	missBloomMeter         = metrics.NewRegisteredMeter("pathdb/bloom/miss", nil)
+	hitBloomMeter          = metrics.NewRegisteredMeter("pathdb/bloom/hit", nil)
+
+	layerTreeUpdateTimer    = metrics.NewRegisteredResettingTimer("pathdb/layertree/update/time", nil)
+	layerTreeGetReaderTimer = metrics.NewRegisteredResettingTimer("pathdb/layertree/getreader/time", nil)
 )

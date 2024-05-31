@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/trie/testutil"
 	"github.com/ethereum/go-ethereum/trie/trienode"
+	"github.com/stretchr/testify/assert"
 )
 
 func emptyLayer() *diskLayer {
@@ -167,4 +168,10 @@ func BenchmarkJournal(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		layer.journal(new(bytes.Buffer), JournalKVType)
 	}
+}
+
+func TestBloomHash(t *testing.T) {
+	n1 := nodeBloomHash(common.Hash{}, []byte{0x01, 0x00})
+	n2 := nodeBloomHash(common.Hash{}, []byte{0x00, 0x00, 0x01, 0x00})
+	assert.NotEqual(t, n1, n2)
 }

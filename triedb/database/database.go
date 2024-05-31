@@ -25,7 +25,7 @@ type Reader interface {
 	// Node retrieves the trie node blob with the provided trie identifier,
 	// node path and the corresponding node hash. No error will be returned
 	// if the node is not found.
-	Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error)
+	Node(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error)
 }
 
 // PreimageStore wraps the methods of a backing store for reading and writing

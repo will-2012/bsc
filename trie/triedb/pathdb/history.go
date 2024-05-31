@@ -529,9 +529,9 @@ func writeHistory(freezer *rawdb.ResettableFreezer, dl *diffLayer) error {
 	// Write history data into five freezer table respectively.
 	rawdb.WriteStateHistory(freezer, dl.stateID(), history.meta.encode(), accountIndex, storageIndex, accountData, storageData)
 
-	historyDataBytesMeter.Mark(int64(dataSize))
-	historyIndexBytesMeter.Mark(int64(indexSize))
-	historyBuildTimeMeter.UpdateSince(start)
+	//historyDataBytesMeter.Mark(int64(dataSize))
+	//historyIndexBytesMeter.Mark(int64(indexSize))
+	//historyBuildTimeMeter.UpdateSince(start)
 	log.Debug("Stored state history", "id", dl.stateID(), "block", dl.block, "data", dataSize, "index", indexSize, "elapsed", common.PrettyDuration(time.Since(start)))
 
 	return nil

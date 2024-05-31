@@ -264,7 +264,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 		endNode := time.Now()
 		cost := common.PrettyDuration(endNode.Sub(startNode))
 		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
-		*args = append(*args, []interface{}{keyStr, cost, "begin_ns", startNode.UnixNano(), "begin_ns", endNode.UnixNano(), "now_ns", time.Now().UnixNano()}...)
+		*args = append(*args, []interface{}{keyStr, cost, "begin_ns", startNode.UnixNano(), "end_ns", endNode.UnixNano(), "now_ns", time.Now().UnixNano()}...)
 		var total_cost time.Duration
 		if step5End.IsZero() {
 			if step7End.IsZero() {
@@ -352,15 +352,26 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 // Node implements the layer interface, retrieving the trie node blob with the
 // provided node information. No error will be returned if the node is not found.
 func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error) {
-	var depth int
+	var (
+		depth      int
+		step1Start time.Time
+		step1End   time.Time
+	)
 	start := time.Now()
 	defer func() {
-		cost := common.PrettyDuration(time.Now().Sub(start))
+		end := time.Now()
+		cost := common.PrettyDuration(end.Sub(start))
 		keyStr := fmt.Sprintf("%d_depth_difflayer_Node", depth)
 		*args = append(*args, []interface{}{keyStr, cost}...)
+		*args = append(*args, []interface{}{"lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
+		*args = append(*args, []interface{}{"start_ts", start.UnixNano()}...)
+		*args = append(*args, []interface{}{"end_ts", end.UnixNano()}...)
+		*args = append(*args, []interface{}{"now_ts", time.Now().UnixNano()}...)
 	}()
 
+	step1Start = time.Now()
 	dl.lock.RLock()
+	step1End = time.Now()
 	defer dl.lock.RUnlock()
 
 	var origin *diskLayer

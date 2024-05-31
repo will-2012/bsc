@@ -241,7 +241,7 @@ func (dl *diffLayer) parentLayer() layer {
 // node retrieves the node with provided node information. It's the internal
 // version of Node function with additional accessed layer tracked. No error
 // will be returned if node is not found.
-func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, depth int, args *[]interface{}) ([]byte, error) {
+func (dl *diffLayer) nodeOld(owner common.Hash, path []byte, hash common.Hash, depth int, args *[]interface{}) ([]byte, error) {
 	var (
 		step1Start  time.Time
 		step1End    time.Time
@@ -351,7 +351,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 
 // Node implements the layer interface, retrieving the trie node blob with the
 // provided node information. No error will be returned if the node is not found.
-func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error) {
+func (dl *diffLayer) NodeOld(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error) {
 	var (
 		depth      int
 		step1Start time.Time
@@ -390,6 +390,146 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args
 		return origin.Node(owner, path, hash, args)
 	}
 	return dl.node(owner, path, hash, depth, args)
+}
+
+func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, depth int, args *[]interface{}) ([]byte, error) {
+	var (
+		step1Start  time.Time
+		step1End    time.Time
+		step2Start  time.Time
+		step2End    time.Time
+		contractLen int64
+		step3Start  time.Time
+		step3End    time.Time
+		trieLen     int64
+		step4Start  time.Time
+		step4End    time.Time
+		step5End    time.Time
+		step6Start  time.Time
+		step6End    time.Time
+		step7Start  time.Time
+		step7End    time.Time
+	)
+	startNode := time.Now()
+	defer func() {
+		endNode := time.Now()
+		cost := common.PrettyDuration(endNode.Sub(startNode))
+		keyStr := fmt.Sprintf("%d_depth_difflayer_node", depth)
+		*args = append(*args, []interface{}{keyStr, cost, "begin_ns", startNode.UnixNano(), "end_ns", endNode.UnixNano(), "now_ns", time.Now().UnixNano()}...)
+		var total_cost time.Duration
+		if step5End.IsZero() {
+			if step7End.IsZero() {
+				total_cost = step6End.Sub(startNode)
+			} else {
+				total_cost = step7End.Sub(startNode)
+			}
+		} else {
+			total_cost = step5End.Sub(startNode)
+		}
+		*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(total_cost), "now_ns", time.Now().UnixNano()}...)
+
+		//if total_cost > 1*time.Millisecond {
+		if false {
+			*args = append(*args, []interface{}{"inner_diff_total_cost", common.PrettyDuration(total_cost), "now_ns", time.Now().UnixNano()}...)
+			*args = append(*args, []interface{}{"inner_lock_cost", common.PrettyDuration(step1End.Sub(step1Start))}...)
+			*args = append(*args, []interface{}{"inner_query_contract_map_cost", common.PrettyDuration(step2End.Sub(step2Start))}...)
+			*args = append(*args, []interface{}{"contract_map_len", contractLen}...)
+			*args = append(*args, []interface{}{"inner_query_trie_map_cost", common.PrettyDuration(step3End.Sub(step3Start))}...)
+			*args = append(*args, []interface{}{"trie_map_len", trieLen}...)
+			*args = append(*args, []interface{}{"inner_update_metrics_cost1", common.PrettyDuration(step6End.Sub(step6Start))}...)
+			if !step7End.IsZero() {
+				*args = append(*args, []interface{}{"inner_update_metrics_cost2", common.PrettyDuration(step7End.Sub(step7Start))}...)
+			}
+			*args = append(*args, []interface{}{"inner_unlock_cost", common.PrettyDuration(step4End.Sub(step4Start))}...)
+		}
+	}()
+
+	// Hold the lock, ensure the parent won't be changed during the
+	// state accessing.
+	step1Start = time.Now()
+	dl.lock.RLock()
+	step1End = time.Now()
+
+	defer func() {
+		step4Start = time.Now()
+		dl.lock.RUnlock()
+		step4End = time.Now()
+	}()
+
+	step2Start = time.Now()
+	// If the trie node is known locally, return it
+	subset, ok := dl.nodes[owner]
+	step2End = time.Now()
+
+	step6Start = time.Now()
+	//pathGetContractDiffLayerTimer.Update(step2End.Sub(step2Start))
+	contractLen = int64(len(dl.nodes))
+	//pathDiffLayerContractLenGauge.Update(contractLen)
+	trieLen = int64(len(subset))
+	pathDiffLayerEOALenGauge.Update(trieLen)
+	if ok {
+		step3Start = time.Now()
+		n, ok := subset[string(path)]
+		step3End = time.Now()
+		// pathGetEOADiffLayerTimer.Update(step3End.Sub(step3Start))
+		step6End = time.Now()
+		if ok {
+			// If the trie node is not hash matched, or marked as removed,
+			// bubble up an error here. It shouldn't happen at all.
+			if n.Hash != hash {
+				dirtyFalseMeter.Mark(1)
+				log.Error("Unexpected trie node in diff layer", "owner", owner, "path", path, "expect", hash, "got", n.Hash)
+				step6End = time.Now()
+				return nil, newUnexpectedNodeError("diff", hash, n.Hash, owner, path, n.Blob)
+			}
+			step7Start = time.Now()
+			//dirtyHitMeter.Mark(1)
+			//dirtyNodeHitDepthHist.Update(int64(depth))
+			//dirtyReadMeter.Mark(int64(len(n.Blob)))
+			step7End = time.Now()
+			return n.Blob, nil
+		}
+	}
+	step5End = time.Now()
+
+	return nil, fmt.Errorf("not found")
+}
+
+func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash, args *[]interface{}) ([]byte, error) {
+	var (
+		depth int
+		blob  []byte
+		err   error
+	)
+	dl.lock.RLock()
+	defer dl.lock.RUnlock()
+	hit := dl.diffed.ContainsHash(nodeBloomHash(owner, path))
+	if !hit {
+		return dl.origin.Node(owner, path, hash, args)
+	}
+	blob, err = dl.node(owner, path, hash, depth, args)
+	if err == nil {
+		return blob, nil
+	}
+
+	for true {
+		if disk, ok := dl.parent.(*diskLayer); ok {
+			return disk.Node(owner, path, hash, args)
+		}
+
+		if diff, ok := dl.parent.(*diffLayer); ok {
+			diff.lock.RLock()
+			defer diff.lock.RUnlock()
+			blob, err = diff.node(owner, path, hash, depth, args)
+			if err == nil {
+				return blob, nil
+			}
+
+		}
+
+	}
+
+	return nil, nil
 }
 
 // update implements the layer interface, creating a new layer on top of the

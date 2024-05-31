@@ -144,12 +144,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	// Optimize memory distribution by reallocating surplus allowance from the
 	// dirty cache to the clean cache.
 	if config.StateScheme == rawdb.PathScheme && config.TrieDirtyCache > pathdb.MaxDirtyBufferSize/1024/1024 {
-		log.Info("Capped dirty cache size", "provided", common.StorageSize(config.TrieDirtyCache)*1024*1024, "adjusted", common.StorageSize(pathdb.MaxDirtyBufferSize))
-		log.Info("Clean cache size", "provided", common.StorageSize(config.TrieCleanCache)*1024*1024)
+		config.TrieCleanCache += config.TrieDirtyCache - pathdb.MaxDirtyBufferSize/1024/1024
 		config.TrieDirtyCache = pathdb.MaxDirtyBufferSize / 1024 / 1024
 	}
-	log.Info("Allocated trie memory caches", "clean", common.StorageSize(config.TrieCleanCache)*1024*1024, "dirty", common.StorageSize(config.TrieDirtyCache)*1024*1024)
-
+	log.Info("Allocated memory caches",
+		"state_schema", config.StateScheme,
+		"trie_clean_cache", common.StorageSize(config.TrieCleanCache)*1024*1024,
+		"trie_dirty_cache", common.StorageSize(config.TrieDirtyCache)*1024*1024,
+		"snapshot_cache", common.StorageSize(config.SnapshotCache)*1024*1024)
 	// Assemble the Ethereum object
 	chainDb, err := stack.OpenAndMergeDatabase("chaindata", config.DatabaseCache, config.DatabaseHandles,
 		config.DatabaseFreezer, config.DatabaseDiff, "eth/db/chaindata/", false, config.PersistDiff, config.PruneAncientData)

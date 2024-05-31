@@ -117,7 +117,7 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 				return nil, newUnexpectedNodeError("diff", hash, n.Hash, owner, path, n.Blob)
 			}
 			dirtyHitMeter.Mark(1)
-			dirtyNodeHitDepthHist.Update(int64(depth))
+			// dirtyNodeHitDepthHist.Update(int64(depth))
 			dirtyReadMeter.Mark(int64(len(n.Blob)))
 			return n.Blob, nil
 		}

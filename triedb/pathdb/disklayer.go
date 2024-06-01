@@ -168,11 +168,11 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 		return nil, err
 	}
 	if n != nil {
-		dirtyHitMeter.Mark(1)
-		dirtyReadMeter.Mark(int64(len(n.Blob)))
+		//dirtyHitMeter.Mark(1)
+		//dirtyReadMeter.Mark(int64(len(n.Blob)))
 		return n.Blob, nil
 	}
-	dirtyMissMeter.Mark(1)
+	//dirtyMissMeter.Mark(1)
 
 	// Try to retrieve the trie node from the clean memory cache
 	key := cacheKey(owner, path)
@@ -183,14 +183,14 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 
 			got := h.hash(blob)
 			if got == hash {
-				cleanHitMeter.Mark(1)
-				cleanReadMeter.Mark(int64(len(blob)))
+				//cleanHitMeter.Mark(1)
+				//cleanReadMeter.Mark(int64(len(blob)))
 				return blob, nil
 			}
-			cleanFalseMeter.Mark(1)
+			//cleanFalseMeter.Mark(1)
 			log.Error("Unexpected trie node in clean cache", "owner", owner, "path", path, "expect", hash, "got", got)
 		}
-		cleanMissMeter.Mark(1)
+		//cleanMissMeter.Mark(1)
 	}
 	// Try to retrieve the trie node from the disk.
 	var (
@@ -203,13 +203,13 @@ func (dl *diskLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 		nBlob, nHash = rawdb.ReadStorageTrieNode(dl.db.diskdb, owner, path)
 	}
 	if nHash != hash {
-		diskFalseMeter.Mark(1)
+		//diskFalseMeter.Mark(1)
 		log.Error("Unexpected trie node in disk", "owner", owner, "path", path, "expect", hash, "got", nHash)
 		return nil, newUnexpectedNodeError("disk", hash, nHash, owner, path, nBlob)
 	}
 	if dl.cleans != nil && len(nBlob) > 0 {
 		dl.cleans.Set(key, nBlob)
-		cleanWriteMeter.Mark(int64(len(nBlob)))
+		//cleanWriteMeter.Mark(int64(len(nBlob)))
 	}
 	return nBlob, nil
 }

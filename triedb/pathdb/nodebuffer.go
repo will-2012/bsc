@@ -71,7 +71,7 @@ func (b *nodebuffer) node(owner common.Hash, path []byte, hash common.Hash) (*tr
 		return nil, nil
 	}
 	if n.Hash != hash {
-		dirtyFalseMeter.Mark(1)
+		//dirtyFalseMeter.Mark(1)
 		log.Error("Unexpected trie node in node buffer", "owner", owner, "path", path, "expect", hash, "got", n.Hash)
 		return nil, newUnexpectedNodeError("dirty", hash, n.Hash, owner, path, n.Blob)
 	}
@@ -118,8 +118,8 @@ func (b *nodebuffer) commit(nodes map[common.Hash]map[string]*trienode.Node) tri
 	}
 	b.updateSize(delta)
 	b.layers++
-	gcNodesMeter.Mark(overwrite)
-	gcBytesMeter.Mark(overwriteSize)
+	//gcNodesMeter.Mark(overwrite)
+	//gcBytesMeter.Mark(overwriteSize)
 	return b
 }
 
@@ -225,7 +225,7 @@ func (b *nodebuffer) flush(db ethdb.KeyValueStore, clean *fastcache.Cache, id ui
 		// some redundancy is added here.
 		batch = db.NewBatchWithSize(int(float64(b.size) * DefaultBatchRedundancyRate))
 	)
-	nodes := writeNodes(batch, b.nodes, clean)
+	_ = writeNodes(batch, b.nodes, clean)
 	rawdb.WritePersistentStateID(batch, id)
 
 	// Flush all mutations in a single batch
@@ -233,9 +233,9 @@ func (b *nodebuffer) flush(db ethdb.KeyValueStore, clean *fastcache.Cache, id ui
 	if err := batch.Write(); err != nil {
 		return err
 	}
-	commitBytesMeter.Mark(int64(size))
-	commitNodesMeter.Mark(int64(nodes))
-	commitTimeTimer.UpdateSince(start)
+	//commitBytesMeter.Mark(int64(size))
+	//commitNodesMeter.Mark(int64(nodes))
+	//commitTimeTimer.UpdateSince(start)
 	log.Debug("Persisted pathdb nodes", "nodes", len(b.nodes), "bytes", common.StorageSize(size), "elapsed", common.PrettyDuration(time.Since(start)))
 	b.reset()
 	return nil

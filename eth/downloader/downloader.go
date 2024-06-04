@@ -997,15 +997,15 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			pivot := d.pivotHeader.Number.Uint64()
 			d.pivotLock.RUnlock()
 
-			p.log.Trace("Fetching next pivot header", "number", pivot+uint64(fsMinFullBlocks))
+			p.log.Info("Fetching next pivot header", "number", pivot+uint64(fsMinFullBlocks))
 			headers, hashes, err = d.fetchHeadersByNumber(p, pivot+uint64(fsMinFullBlocks), 2, fsMinFullBlocks-9, false) // move +64 when it's 2x64-8 deep
 
 		case skeleton:
-			p.log.Trace("Fetching skeleton headers", "count", MaxHeaderFetch, "from", from)
+			p.log.Info("Fetching skeleton headers", "count", MaxHeaderFetch, "from", from)
 			headers, hashes, err = d.fetchHeadersByNumber(p, from+uint64(MaxHeaderFetch)-1, MaxSkeletonSize, MaxHeaderFetch-1, false)
 
 		default:
-			p.log.Trace("Fetching full headers", "count", MaxHeaderFetch, "from", from)
+			p.log.Info("Fetching full headers", "count", MaxHeaderFetch, "from", from)
 			headers, hashes, err = d.fetchHeadersByNumber(p, from, MaxHeaderFetch, 0, false)
 		}
 		switch err {

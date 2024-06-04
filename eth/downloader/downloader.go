@@ -787,7 +787,7 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 		}
 	*/
 	p.log.Info("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
-	return localHeight, nil
+	return localHeight - 256, nil
 
 	// Recap floor value for binary search
 	maxForkAncestry := FullMaxForkAncestry
@@ -1194,7 +1194,7 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 // The method returns the entire filled skeleton and also the number of headers
 // already forwarded for processing.
 func (d *Downloader) fillHeaderSkeleton(from uint64, skeleton []*types.Header) ([]*types.Header, []common.Hash, int, error) {
-	log.Debug("Filling up skeleton", "from", from)
+	log.Info("Filling up skeleton", "from", from)
 	d.queue.ScheduleSkeleton(from, skeleton)
 
 	err := d.concurrentFetch((*headerQueue)(d), false)

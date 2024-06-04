@@ -787,6 +787,7 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 		}
 	*/
 	p.log.Info("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
+	return localHeight, nil
 
 	// Recap floor value for binary search
 	maxForkAncestry := FullMaxForkAncestry

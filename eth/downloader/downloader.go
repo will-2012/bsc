@@ -858,7 +858,7 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		expectNumber := from + int64(i)*int64(skip+1)
 		if number := header.Number.Int64(); number != expectNumber {
 			p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
-			return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
+			return 0, fmt.Errorf("DDDDD %w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 		}
 	}
 	// Check if a common ancestor was found
@@ -1106,8 +1106,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 		if skeleton {
 			filled, hashset, proced, err := d.fillHeaderSkeleton(from, headers)
 			if err != nil {
-				p.log.Debug("Skeleton chain invalid", "err", err)
-				return fmt.Errorf("%w: %v", errInvalidChain, err)
+				p.log.Info("Skeleton chain invalid", "err", err)
+				return fmt.Errorf("EEEEE %w: %v", errInvalidChain, err)
 			}
 			headers = filled[proced:]
 			hashes = hashset[proced:]
@@ -1315,7 +1315,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 					if len(chunkHeaders) > 0 {
 						if n, err := d.lightchain.InsertHeaderChain(chunkHeaders); err != nil {
 							log.Warn("Invalid header encountered", "number", chunkHeaders[n].Number, "hash", chunkHashes[n], "parent", chunkHeaders[n].ParentHash, "err", err)
-							return fmt.Errorf("%w: %v", errInvalidChain, err)
+							return fmt.Errorf("FFFFF %w: %v", errInvalidChain, err)
 						}
 					}
 				}
@@ -1412,7 +1412,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 		if errors.Is(err, core.ErrAncestorHasNotBeenVerified) {
 			return err
 		}
-		return fmt.Errorf("%w: %v", errInvalidChain, err)
+		return fmt.Errorf("AAAAA %w: %v", errInvalidChain, err)
 	}
 	return nil
 }
@@ -1610,7 +1610,7 @@ func (d *Downloader) commitSnapSyncData(results []*fetchResult, stateSync *state
 	}
 	if index, err := d.blockchain.InsertReceiptChain(blocks, receipts, d.ancientLimit); err != nil {
 		log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "err", err)
-		return fmt.Errorf("%w: %v", errInvalidChain, err)
+		return fmt.Errorf("BBBBB %w: %v", errInvalidChain, err)
 	}
 	return nil
 }

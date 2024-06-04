@@ -786,7 +786,7 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 			localHeight = d.lightchain.CurrentHeader().Number.Uint64()
 		}
 	*/
-	p.log.Debug("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
+	p.log.Info("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
 
 	// Recap floor value for binary search
 	maxForkAncestry := FullMaxForkAncestry

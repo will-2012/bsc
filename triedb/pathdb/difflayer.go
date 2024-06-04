@@ -148,8 +148,8 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 		return blob, nil
 	}
 
+	parent := dl.parent
 	for {
-		parent := dl.parent
 		if disk, ok := parent.(*diskLayer); ok {
 			blob, err := disk.Node(owner, path, hash)
 			if err != nil {
@@ -158,6 +158,7 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 				return blob, nil
 			}
 		}
+		parent = parent.parentLayer()
 	}
 	//return dl.node(owner, path, hash, 0)
 }

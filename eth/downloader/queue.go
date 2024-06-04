@@ -695,12 +695,13 @@ func (q *queue) DeliverHeaders(id string, headers []*types.Header, hashes []comm
 	target := q.headerTaskPool[request.From].Hash()
 
 	accepted := len(headers) == MaxHeaderFetch
+	log.Info("fetch header %v %v", len(headers), MaxHeaderFetch)
 	if accepted {
 		if headers[0].Number.Uint64() != request.From {
-			logger.Trace("First header broke chain ordering", "number", headers[0].Number, "hash", hashes[0], "expected", request.From)
+			logger.Info("First header broke chain ordering", "number", headers[0].Number, "hash", hashes[0], "expected", request.From)
 			accepted = false
 		} else if hashes[len(headers)-1] != target {
-			logger.Trace("Last header broke skeleton structure ", "number", headers[len(headers)-1].Number, "hash", hashes[len(headers)-1], "expected", target)
+			logger.Info("Last header broke skeleton structure ", "number", headers[len(headers)-1].Number, "hash", hashes[len(headers)-1], "expected", target)
 			accepted = false
 		}
 	}

@@ -786,7 +786,8 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 			localHeight = d.lightchain.CurrentHeader().Number.Uint64()
 		}
 	*/
-	p.log.Debug("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
+	p.log.Info("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
+	return localHeight - 256, nil
 
 	// Recap floor value for binary search
 	maxForkAncestry := FullMaxForkAncestry
@@ -857,7 +858,7 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 		expectNumber := from + int64(i)*int64(skip+1)
 		if number := header.Number.Int64(); number != expectNumber {
 			p.log.Warn("Head headers broke chain ordering", "index", i, "requested", expectNumber, "received", number)
-			return 0, fmt.Errorf("%w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
+			return 0, fmt.Errorf("DDDDD %w: %v", errInvalidChain, errors.New("head headers broke chain ordering"))
 		}
 	}
 	// Check if a common ancestor was found
@@ -910,13 +911,17 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 		// Split our chain interval in two, and request the hash to cross check
 		check := (start + end) / 2
 
+		if check < 2044567 {
+			check = 2044567
+		}
+
 		headers, hashes, err := d.fetchHeadersByNumber(p, check, 1, 0, false)
 		if err != nil {
 			return 0, err
 		}
 		// Make sure the peer actually gave something valid
 		if len(headers) != 1 {
-			p.log.Warn("Multiple headers for single request", "headers", len(headers))
+			p.log.Warn("Multiple headers for single request", "headers", len(headers), "block_number", check, "peer", p.id, "remote_height", remoteHeight)
 			return 0, fmt.Errorf("%w: multiple headers (%d) for single request", errBadPeer, len(headers))
 		}
 		// Modify the search interval based on the response
@@ -992,15 +997,15 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 			pivot := d.pivotHeader.Number.Uint64()
 			d.pivotLock.RUnlock()
 
-			p.log.Trace("Fetching next pivot header", "number", pivot+uint64(fsMinFullBlocks))
+			p.log.Info("Fetching next pivot header", "number", pivot+uint64(fsMinFullBlocks))
 			headers, hashes, err = d.fetchHeadersByNumber(p, pivot+uint64(fsMinFullBlocks), 2, fsMinFullBlocks-9, false) // move +64 when it's 2x64-8 deep
 
 		case skeleton:
-			p.log.Trace("Fetching skeleton headers", "count", MaxHeaderFetch, "from", from)
+			p.log.Info("Fetching skeleton headers", "count", MaxHeaderFetch, "from", from)
 			headers, hashes, err = d.fetchHeadersByNumber(p, from+uint64(MaxHeaderFetch)-1, MaxSkeletonSize, MaxHeaderFetch-1, false)
 
 		default:
-			p.log.Trace("Fetching full headers", "count", MaxHeaderFetch, "from", from)
+			p.log.Info("Fetching full headers", "count", MaxHeaderFetch, "from", from)
 			headers, hashes, err = d.fetchHeadersByNumber(p, from, MaxHeaderFetch, 0, false)
 		}
 		switch err {
@@ -1101,8 +1106,8 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 		if skeleton {
 			filled, hashset, proced, err := d.fillHeaderSkeleton(from, headers)
 			if err != nil {
-				p.log.Debug("Skeleton chain invalid", "err", err)
-				return fmt.Errorf("%w: %v", errInvalidChain, err)
+				p.log.Info("Skeleton chain invalid", "err", err)
+				return fmt.Errorf("EEEEE %w: %v", errInvalidChain, err)
 			}
 			headers = filled[proced:]
 			hashes = hashset[proced:]
@@ -1189,7 +1194,7 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64, head uint64) e
 // The method returns the entire filled skeleton and also the number of headers
 // already forwarded for processing.
 func (d *Downloader) fillHeaderSkeleton(from uint64, skeleton []*types.Header) ([]*types.Header, []common.Hash, int, error) {
-	log.Debug("Filling up skeleton", "from", from)
+	log.Info("Filling up skeleton", "from", from)
 	d.queue.ScheduleSkeleton(from, skeleton)
 
 	err := d.concurrentFetch((*headerQueue)(d), false)
@@ -1310,7 +1315,7 @@ func (d *Downloader) processHeaders(origin uint64, td, ttd *big.Int, beaconMode 
 					if len(chunkHeaders) > 0 {
 						if n, err := d.lightchain.InsertHeaderChain(chunkHeaders); err != nil {
 							log.Warn("Invalid header encountered", "number", chunkHeaders[n].Number, "hash", chunkHashes[n], "parent", chunkHeaders[n].ParentHash, "err", err)
-							return fmt.Errorf("%w: %v", errInvalidChain, err)
+							return fmt.Errorf("FFFFF %w: %v", errInvalidChain, err)
 						}
 					}
 				}
@@ -1407,7 +1412,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 		if errors.Is(err, core.ErrAncestorHasNotBeenVerified) {
 			return err
 		}
-		return fmt.Errorf("%w: %v", errInvalidChain, err)
+		return fmt.Errorf("AAAAA %w: %v", errInvalidChain, err)
 	}
 	return nil
 }
@@ -1605,7 +1610,7 @@ func (d *Downloader) commitSnapSyncData(results []*fetchResult, stateSync *state
 	}
 	if index, err := d.blockchain.InsertReceiptChain(blocks, receipts, d.ancientLimit); err != nil {
 		log.Debug("Downloaded item processing failed", "number", results[index].Header.Number, "hash", results[index].Header.Hash(), "err", err)
-		return fmt.Errorf("%w: %v", errInvalidChain, err)
+		return fmt.Errorf("BBBBB %w: %v", errInvalidChain, err)
 	}
 	return nil
 }

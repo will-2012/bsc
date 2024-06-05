@@ -39,7 +39,7 @@ func (h *HashIndex) Set(hash common.Hash, node *trienode.Node) {
 }
 
 func (h *HashIndex) Get(hash common.Hash) *trienode.Node {
-	h.lock.RUnlock()
+	h.lock.RLock()
 	defer h.lock.RUnlock()
 
 	if n, ok := h.cache[hash]; ok {

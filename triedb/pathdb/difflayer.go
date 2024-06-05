@@ -60,10 +60,12 @@ func (h *HashIndex) Remove(ly layer) {
 	if !ok {
 		return
 	}
+
 	go func() {
 		for _, subset := range dl.nodes {
 			for _, node := range subset {
 				h.Del(node.Hash)
+				log.Info("del map item", "root", ly.rootHash().String(), "key", node.Hash.String())
 			}
 		}
 	}()
@@ -112,6 +114,7 @@ func newDiffLayer(parent layer, root common.Hash, id uint64, block uint64, nodes
 	}
 	for _, subset := range nodes {
 		for _, n := range subset {
+			log.Info("add map item", "root", root.String(), "key", n.Hash.String())
 			dl.cache.Set(n.Hash, n)
 			dl.memory += uint64(n.Size() + len(n.Hash))
 			size += int64(len(n.Blob) + len(n.Hash))

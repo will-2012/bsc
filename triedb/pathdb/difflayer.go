@@ -26,6 +26,55 @@ import (
 	"github.com/ethereum/go-ethereum/trie/triestate"
 )
 
+type HashIndex struct {
+	cache map[common.Hash]*trienode.Node
+	lock  sync.RWMutex
+}
+
+func (h *HashIndex) Set(hash common.Hash, node *trienode.Node) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+
+	h.cache[hash] = node
+}
+
+func (h *HashIndex) Get(hash common.Hash) *trienode.Node {
+	h.lock.RLock()
+	defer h.lock.RUnlock()
+
+	if n, ok := h.cache[hash]; ok {
+		return n
+	}
+	return nil
+}
+
+func (h *HashIndex) Del(hash common.Hash) {
+	h.lock.Lock()
+	defer h.lock.Unlock()
+
+	delete(h.cache, hash)
+}
+
+func (h *HashIndex) Remove(ly layer) {
+	// log.Info("Remove hash index", "root", ly.rootHash().String())
+	dl, ok := ly.(*diffLayer)
+	if !ok {
+		return
+	}
+	// log.Info("Real remove hash index", "root", ly.rootHash().String())
+
+	go func() {
+		// log.Info("Go start real remove hash index", "root", ly.rootHash().String())
+		for _, subset := range dl.nodes {
+			for _, node := range subset {
+				h.Del(node.Hash)
+				// log.Info("del map item", "root", ly.rootHash().String(), "key", node.Hash.String())
+			}
+		}
+		// log.Info("Go end real remove hash index", "root", ly.rootHash().String())
+	}()
+}
+
 // diffLayer represents a collection of modifications made to the in-memory tries
 // along with associated state changes after running a block on top.
 //
@@ -39,6 +88,8 @@ type diffLayer struct {
 	nodes  map[common.Hash]map[string]*trienode.Node // Cached trie nodes indexed by owner and path
 	states *triestate.Set                            // Associated state change set for building history
 	memory uint64                                    // Approximate guess as to how much memory we use
+
+	cache *HashIndex
 
 	parent layer        // Parent layer modified by this one, never nil, **can be changed**
 	lock   sync.RWMutex // Lock used to protect parent
@@ -58,10 +109,19 @@ func newDiffLayer(parent layer, root common.Hash, id uint64, block uint64, nodes
 		states: states,
 		parent: parent,
 	}
+	if pdl, ok := parent.(*diffLayer); ok && pdl.cache != nil {
+		dl.cache = pdl.cache
+	} else {
+		dl.cache = &HashIndex{
+			cache: make(map[common.Hash]*trienode.Node),
+		}
+	}
 	for _, subset := range nodes {
-		for path, n := range subset {
-			dl.memory += uint64(n.Size() + len(path))
-			size += int64(len(n.Blob) + len(path))
+		for _, n := range subset {
+			// log.Info("add map item", "root", root.String(), "key", n.Hash.String())
+			dl.cache.Set(n.Hash, n)
+			dl.memory += uint64(n.Size() + len(n.Hash))
+			size += int64(len(n.Blob) + len(n.Hash))
 		}
 		count += len(subset)
 	}
@@ -133,7 +193,27 @@ func (dl *diffLayer) node(owner common.Hash, path []byte, hash common.Hash, dept
 // Node implements the layer interface, retrieving the trie node blob with the
 // provided node information. No error will be returned if the node is not found.
 func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]byte, error) {
-	return dl.node(owner, path, hash, 0)
+	if n := dl.cache.Get(hash); n != nil {
+		dirtyHitMeter.Mark(1)
+		dirtyReadMeter.Mark(int64(len(n.Blob)))
+		// log.Info("hit difflayer map", "root", hash.String())
+		return n.Blob, nil
+	}
+
+	parent := dl.parent
+	for {
+		if disk, ok := parent.(*diskLayer); ok {
+			blob, err := disk.Node(owner, path, hash)
+			if err != nil {
+				log.Warn("hash map and disklayer mismatch, retry difflayer", "owner", owner, "path", path, "hash", hash.String())
+				return dl.node(owner, path, hash, 0)
+			} else {
+				return blob, nil
+			}
+		}
+		parent = parent.parentLayer()
+	}
+	//return dl.node(owner, path, hash, 0)
 }
 
 // update implements the layer interface, creating a new layer on top of the

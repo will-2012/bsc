@@ -113,6 +113,7 @@ func (tree *layerTree) add(root common.Hash, parentRoot common.Hash, block uint6
 // cap traverses downwards the diff tree until the number of allowed diff layers
 // are crossed. All diffs beyond the permitted number are flattened downwards.
 func (tree *layerTree) cap(root common.Hash, layers int) error {
+	log.Info("cap layer tree", "root", root.String(), "layers", layers)
 	// Retrieve the head layer to cap from
 	root = types.TrieRootHash(root)
 	l := tree.get(root)
@@ -146,6 +147,7 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 			return nil
 		}
 	}
+	log.Info("real cap layer tree", "root", root.String(), "layers", layers)
 	// We're out of layers, flatten anything below, stopping if it's the disk or if
 	// the memory limit is not yet exceeded.
 	switch parent := diff.parentLayer().(type) {
@@ -180,8 +182,20 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 	}
 	var remove func(root common.Hash)
 	remove = func(root common.Hash) {
+		//df, exit := tree.layers[root]
+		//if exit {
+		//	if dl, ok := df.(*diffLayer); ok {
+		//		dl.cache.Remove(dl)
+		//	}
+		//}
+		log.Info("remove layer", "root", root.String())
 		delete(tree.layers, root)
 		for _, child := range children[root] {
+			//if df, exist := tree.layers[child]; exist {
+			//	if dl, ok := df.(*diffLayer); ok {
+			//		dl.cache.Remove(dl)
+			//	}
+			//}
 			remove(child)
 		}
 		delete(children, root)

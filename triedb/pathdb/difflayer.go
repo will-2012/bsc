@@ -56,18 +56,22 @@ func (h *HashIndex) Del(hash common.Hash) {
 }
 
 func (h *HashIndex) Remove(ly layer) {
+	log.Info("Remove hash index", "root", ly.rootHash().String())
 	dl, ok := ly.(*diffLayer)
 	if !ok {
 		return
 	}
+	log.Info("Real remove hash index", "root", ly.rootHash().String())
 
 	go func() {
+		log.Info("Go start real remove hash index", "root", ly.rootHash().String())
 		for _, subset := range dl.nodes {
 			for _, node := range subset {
 				h.Del(node.Hash)
 				log.Info("del map item", "root", ly.rootHash().String(), "key", node.Hash.String())
 			}
 		}
+		log.Info("Go end real remove hash index", "root", ly.rootHash().String())
 	}()
 }
 

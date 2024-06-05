@@ -196,6 +196,7 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 	if n := dl.cache.Get(hash); n != nil {
 		dirtyHitMeter.Mark(1)
 		dirtyReadMeter.Mark(int64(len(n.Blob)))
+		log.Info("hit difflayer map", "root", hash.String())
 		return n.Blob, nil
 	}
 
@@ -204,7 +205,7 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 		if disk, ok := parent.(*diskLayer); ok {
 			blob, err := disk.Node(owner, path, hash)
 			if err != nil {
-				log.Warn("hash map and disklayer mismatch, retry difflayer", "owner", owner, "path", path, "hash", hash)
+				log.Warn("hash map and disklayer mismatch, retry difflayer", "owner", owner, "path", path, "hash", hash.String())
 				return dl.node(owner, path, hash, 0)
 			} else {
 				return blob, nil

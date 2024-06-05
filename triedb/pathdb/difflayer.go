@@ -111,10 +111,10 @@ func newDiffLayer(parent layer, root common.Hash, id uint64, block uint64, nodes
 		}
 	}
 	for _, subset := range nodes {
-		for path, n := range subset {
+		for _, n := range subset {
 			dl.cache.Set(n.Hash, n)
-			dl.memory += uint64(n.Size() + len(path))
-			size += int64(len(n.Blob) + len(path))
+			dl.memory += uint64(n.Size() + len(n.Hash))
+			size += int64(len(n.Blob) + len(n.Hash))
 		}
 		count += len(subset)
 	}

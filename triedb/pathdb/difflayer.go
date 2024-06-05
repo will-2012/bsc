@@ -56,22 +56,22 @@ func (h *HashIndex) Del(hash common.Hash) {
 }
 
 func (h *HashIndex) Remove(ly layer) {
-	log.Info("Remove hash index", "root", ly.rootHash().String())
+	// log.Info("Remove hash index", "root", ly.rootHash().String())
 	dl, ok := ly.(*diffLayer)
 	if !ok {
 		return
 	}
-	log.Info("Real remove hash index", "root", ly.rootHash().String())
+	// log.Info("Real remove hash index", "root", ly.rootHash().String())
 
 	go func() {
-		log.Info("Go start real remove hash index", "root", ly.rootHash().String())
+		// log.Info("Go start real remove hash index", "root", ly.rootHash().String())
 		for _, subset := range dl.nodes {
 			for _, node := range subset {
 				h.Del(node.Hash)
-				log.Info("del map item", "root", ly.rootHash().String(), "key", node.Hash.String())
+				// log.Info("del map item", "root", ly.rootHash().String(), "key", node.Hash.String())
 			}
 		}
-		log.Info("Go end real remove hash index", "root", ly.rootHash().String())
+		// log.Info("Go end real remove hash index", "root", ly.rootHash().String())
 	}()
 }
 
@@ -118,7 +118,7 @@ func newDiffLayer(parent layer, root common.Hash, id uint64, block uint64, nodes
 	}
 	for _, subset := range nodes {
 		for _, n := range subset {
-			log.Info("add map item", "root", root.String(), "key", n.Hash.String())
+			// log.Info("add map item", "root", root.String(), "key", n.Hash.String())
 			dl.cache.Set(n.Hash, n)
 			dl.memory += uint64(n.Size() + len(n.Hash))
 			size += int64(len(n.Blob) + len(n.Hash))
@@ -196,7 +196,7 @@ func (dl *diffLayer) Node(owner common.Hash, path []byte, hash common.Hash) ([]b
 	if n := dl.cache.Get(hash); n != nil {
 		dirtyHitMeter.Mark(1)
 		dirtyReadMeter.Mark(int64(len(n.Blob)))
-		log.Info("hit difflayer map", "root", hash.String())
+		// log.Info("hit difflayer map", "root", hash.String())
 		return n.Blob, nil
 	}
 

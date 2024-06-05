@@ -191,11 +191,11 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 		log.Info("remove layer", "root", root.String())
 		delete(tree.layers, root)
 		for _, child := range children[root] {
-			if df, exist := tree.layers[child]; exist {
-				if dl, ok := df.(*diffLayer); ok {
-					dl.cache.Remove(dl)
-				}
-			}
+			//if df, exist := tree.layers[child]; exist {
+			//	if dl, ok := df.(*diffLayer); ok {
+			//		dl.cache.Remove(dl)
+			//	}
+			//}
 			remove(child)
 		}
 		delete(children, root)

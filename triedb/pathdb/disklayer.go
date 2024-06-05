@@ -286,9 +286,9 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 		}
 		log.Debug("Pruned state history", "items", pruned, "tailid", oldest)
 	}
-	log.Info("Begin to remove")
+	// log.Info("Begin to remove")
 	bottom.cache.Remove(bottom)
-	log.Info("End to remove")
+	// log.Info("End to remove")
 	return ndl, nil
 }
 

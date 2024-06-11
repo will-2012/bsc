@@ -19,6 +19,7 @@ package pathdb
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -29,6 +30,49 @@ import (
 type RefTrieNode struct {
 	refCount uint32
 	node     *trienode.Node
+
+	// just for debug
+	block uint64
+	root  common.Hash
+	addTS time.Time
+
+	// last update
+	updateBlock uint64
+	updateRoot  common.Hash
+	updateTS    time.Time
+}
+
+func (h *HashNodeCache) checkExpire() {
+	if h == nil {
+		return
+	}
+	printTicker := time.NewTicker(time.Second * 60)
+	defer printTicker.Stop()
+	for {
+		select {
+		case <-printTicker.C:
+			h.lock.RLock()
+			log.Info("Print debug cache")
+			count := 0
+			for key, value := range h.cache {
+				if time.Now().Sub(value.addTS) > 60*time.Second*15 {
+					log.Info("Check cache",
+						"trie_node_hash", key.String(), "ref_count", value.refCount,
+						"add_block_number", value.block,
+						"add_root", value.root.String(),
+						"add_ts", value.addTS.String(),
+						"update_block_number", value.updateBlock,
+						"update_root", value.updateRoot.String(),
+						"update_ts", value.updateTS.String())
+					count++
+					if count >= 10 {
+						break
+					}
+				}
+			}
+			h.lock.RUnlock()
+		}
+	}
 }
 
 type HashNodeCache struct {
@@ -54,8 +98,32 @@ func (h *HashNodeCache) set(hash common.Hash, node *trienode.Node) {
 	if n, ok := h.cache[hash]; ok {
 		n.refCount++
 	} else {
-		h.cache[hash] = &RefTrieNode{1, node}
+		h.cache[hash] = &RefTrieNode{refCount: 1, node: node}
 	}
+}
+
+func (h *HashNodeCache) setNew(hash common.Hash, node *trienode.Node, block uint64, root common.Hash) {
+	if h == nil {
+		return
+	}
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	if n, ok := h.cache[hash]; ok {
+		n.refCount++
+		n.updateBlock = block
+		n.updateRoot = root
+		n.updateTS = time.Now()
+	} else {
+		h.cache[hash] = &RefTrieNode{refCount: 1, node: node, block: block, root: root, addTS: time.Now()}
+	}
+	log.Info("set cache",
+		"trie_node_hash", hash.String(), "ref_count", h.cache[hash].refCount,
+		"add_block_number", h.cache[hash].block,
+		"add_root", h.cache[hash].root.String(),
+		"add_ts", h.cache[hash].addTS.String(),
+		"update_block_number", h.cache[hash].updateBlock,
+		"update_root", h.cache[hash].updateRoot.String(),
+		"update_ts", h.cache[hash].updateTS.String())
 }
 
 func (h *HashNodeCache) Get(hash common.Hash) *trienode.Node {
@@ -87,6 +155,34 @@ func (h *HashNodeCache) del(hash common.Hash) {
 		delete(h.cache, hash)
 	}
 }
+func (h *HashNodeCache) delNew(hash common.Hash, block uint64, root common.Hash) {
+	if h == nil {
+		return
+	}
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	n, ok := h.cache[hash]
+	if !ok {
+		return
+	}
+	if n.refCount > 0 {
+		n.refCount--
+		n.updateBlock = block
+		n.updateRoot = root
+		n.updateTS = time.Now()
+	}
+	log.Info("del cache",
+		"trie_node_hash", hash.String(), "ref_count", h.cache[hash].refCount,
+		"add_block_number", h.cache[hash].block,
+		"add_root", h.cache[hash].root.String(),
+		"add_ts", h.cache[hash].addTS.String(),
+		"update_block_number", h.cache[hash].updateBlock,
+		"update_root", h.cache[hash].updateRoot.String(),
+		"update_ts", h.cache[hash].updateTS.String())
+	if n.refCount == 0 {
+		delete(h.cache, hash)
+	}
+}
 
 func (h *HashNodeCache) Add(ly layer) {
 	if h == nil {
@@ -99,7 +195,7 @@ func (h *HashNodeCache) Add(ly layer) {
 	beforeAdd := h.length()
 	for _, subset := range dl.nodes {
 		for _, node := range subset {
-			h.set(node.Hash, node)
+			h.setNew(node.Hash, node, dl.block, dl.root)
 		}
 	}
 	diffHashCacheLengthGauge.Update(int64(h.length()))
@@ -118,7 +214,8 @@ func (h *HashNodeCache) Remove(ly layer) {
 		beforeDel := h.length()
 		for _, subset := range dl.nodes {
 			for _, node := range subset {
-				h.del(node.Hash)
+				// h.del(node.Hash)
+				h.delNew(node.Hash, dl.block, dl.root)
 			}
 		}
 		diffHashCacheLengthGauge.Update(int64(h.length()))
@@ -166,6 +263,7 @@ func newDiffLayer(parent layer, root common.Hash, id uint64, block uint64, nodes
 		dl.cache = &HashNodeCache{
 			cache: make(map[common.Hash]*RefTrieNode),
 		}
+		go dl.cache.checkExpire()
 	}
 
 	for _, subset := range nodes {

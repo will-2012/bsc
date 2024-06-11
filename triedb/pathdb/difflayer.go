@@ -19,6 +19,7 @@ package pathdb
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -29,6 +30,35 @@ import (
 type RefTrieNode struct {
 	refCount uint32
 	node     *trienode.Node
+
+	// just for debug
+	block uint64
+	root  common.Hash
+	addTS time.Time
+}
+
+func (h *HashNodeCache) checkExpire() {
+	if h == nil {
+		return
+	}
+	printTicker := time.NewTicker(time.Second * 60)
+	defer printTicker.Stop()
+	for {
+		select {
+		case <-printTicker.C:
+			h.lock.RLock()
+			for key, value := range h.cache {
+				if time.Now().Sub(value.addTS) > 180*time.Second {
+					log.Info("check cache",
+						"trie_node_hash", key.String(), "ref_count", value.refCount,
+						"add_block_number", value.block,
+						"add_root", value.root.String(),
+						"add_ts", value.addTS.String())
+				}
+			}
+			h.lock.RUnlock()
+		}
+	}
 }
 
 type HashNodeCache struct {
@@ -54,7 +84,20 @@ func (h *HashNodeCache) set(hash common.Hash, node *trienode.Node) {
 	if n, ok := h.cache[hash]; ok {
 		n.refCount++
 	} else {
-		h.cache[hash] = &RefTrieNode{1, node}
+		h.cache[hash] = &RefTrieNode{refCount: 1, node: node}
+	}
+}
+
+func (h *HashNodeCache) setNew(hash common.Hash, node *trienode.Node, block uint64, root common.Hash) {
+	if h == nil {
+		return
+	}
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	if n, ok := h.cache[hash]; ok {
+		n.refCount++
+	} else {
+		h.cache[hash] = &RefTrieNode{1, node, block, root, time.Now()}
 	}
 }
 
@@ -99,7 +142,7 @@ func (h *HashNodeCache) Add(ly layer) {
 	beforeAdd := h.length()
 	for _, subset := range dl.nodes {
 		for _, node := range subset {
-			h.set(node.Hash, node)
+			h.setNew(node.Hash, node, dl.block, dl.root)
 		}
 	}
 	diffHashCacheLengthGauge.Update(int64(h.length()))
@@ -166,6 +209,7 @@ func newDiffLayer(parent layer, root common.Hash, id uint64, block uint64, nodes
 		dl.cache = &HashNodeCache{
 			cache: make(map[common.Hash]*RefTrieNode),
 		}
+		go dl.cache.checkExpire()
 	}
 
 	for _, subset := range nodes {

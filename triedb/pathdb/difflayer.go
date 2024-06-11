@@ -35,6 +35,11 @@ type RefTrieNode struct {
 	block uint64
 	root  common.Hash
 	addTS time.Time
+
+	// last update
+	updateBlock uint64
+	updateRoot  common.Hash
+	updateTS    time.Time
 }
 
 func (h *HashNodeCache) checkExpire() {
@@ -53,7 +58,10 @@ func (h *HashNodeCache) checkExpire() {
 						"trie_node_hash", key.String(), "ref_count", value.refCount,
 						"add_block_number", value.block,
 						"add_root", value.root.String(),
-						"add_ts", value.addTS.String())
+						"add_ts", value.addTS.String(),
+						"update_block_number", value.updateBlock,
+						"update_root", value.updateRoot.String(),
+						"update_ts", value.updateTS.String())
 				}
 			}
 			h.lock.RUnlock()
@@ -96,8 +104,11 @@ func (h *HashNodeCache) setNew(hash common.Hash, node *trienode.Node, block uint
 	defer h.lock.Unlock()
 	if n, ok := h.cache[hash]; ok {
 		n.refCount++
+		n.updateBlock = block
+		n.updateRoot = root
+		n.updateTS = time.Now()
 	} else {
-		h.cache[hash] = &RefTrieNode{1, node, block, root, time.Now()}
+		h.cache[hash] = &RefTrieNode{refCount: 1, node: node, block: block, root: root, addTS: time.Now()}
 	}
 }
 
@@ -125,6 +136,26 @@ func (h *HashNodeCache) del(hash common.Hash) {
 	}
 	if n.refCount > 0 {
 		n.refCount--
+	}
+	if n.refCount == 0 {
+		delete(h.cache, hash)
+	}
+}
+func (h *HashNodeCache) delNew(hash common.Hash, block uint64, root common.Hash) {
+	if h == nil {
+		return
+	}
+	h.lock.Lock()
+	defer h.lock.Unlock()
+	n, ok := h.cache[hash]
+	if !ok {
+		return
+	}
+	if n.refCount > 0 {
+		n.refCount--
+		n.updateBlock = block
+		n.updateRoot = root
+		n.updateTS = time.Now()
 	}
 	if n.refCount == 0 {
 		delete(h.cache, hash)
@@ -161,7 +192,8 @@ func (h *HashNodeCache) Remove(ly layer) {
 		beforeDel := h.length()
 		for _, subset := range dl.nodes {
 			for _, node := range subset {
-				h.del(node.Hash)
+				// h.del(node.Hash)
+				h.delNew(node.Hash, dl.block, dl.root)
 			}
 		}
 		diffHashCacheLengthGauge.Update(int64(h.length()))

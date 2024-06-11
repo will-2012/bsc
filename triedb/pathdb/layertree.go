@@ -19,6 +19,7 @@ package pathdb
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -142,12 +143,24 @@ func (tree *layerTree) cap(root common.Hash, layers int) error {
 
 	defer func() {
 		log.Info("Succeed to cap", "root", root.String(), "layers", layers, "layer_tree_len", len(tree.layers))
+		minBlockID := uint64(math.MaxUint64)
+		maxBlockID := uint64(0)
 		for _, ly := range tree.layers {
 			if dl, ok := ly.(*diffLayer); ok {
-				log.Info("Print cache", "cache_length", dl.cache.length())
-				break
+				log.Info("Print difflayer in layer tree",
+					"diff_block_id", dl.block,
+					"diff_root", dl.root.String(),
+					"diff_parent", dl.parent.rootHash().String(),
+					"cache_length", dl.cache.length())
+				if dl.block < minBlockID {
+					minBlockID = dl.block
+				}
+				if dl.block > maxBlockID {
+					maxBlockID = dl.block
+				}
 			}
 		}
+		log.Info("Print layer min and max", "min_block_id", minBlockID, "max_block_id", maxBlockID)
 	}()
 
 	// If full commit was requested, flatten the diffs and merge onto disk

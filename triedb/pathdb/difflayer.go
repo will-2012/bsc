@@ -52,6 +52,7 @@ func (h *HashNodeCache) checkExpire() {
 		select {
 		case <-printTicker.C:
 			h.lock.RLock()
+			count := 0
 			for key, value := range h.cache {
 				if time.Now().Sub(value.addTS) > 180*time.Second {
 					log.Info("check cache",
@@ -62,6 +63,10 @@ func (h *HashNodeCache) checkExpire() {
 						"update_block_number", value.updateBlock,
 						"update_root", value.updateRoot.String(),
 						"update_ts", value.updateTS.String())
+					count++
+					if count >= 3 {
+						break
+					}
 				}
 			}
 			h.lock.RUnlock()
@@ -110,6 +115,14 @@ func (h *HashNodeCache) setNew(hash common.Hash, node *trienode.Node, block uint
 	} else {
 		h.cache[hash] = &RefTrieNode{refCount: 1, node: node, block: block, root: root, addTS: time.Now()}
 	}
+	log.Info("set cache",
+		"trie_node_hash", hash.String(), "ref_count", h.cache[hash].refCount,
+		"add_block_number", h.cache[hash].block,
+		"add_root", h.cache[hash].root.String(),
+		"add_ts", h.cache[hash].addTS.String(),
+		"update_block_number", h.cache[hash].updateBlock,
+		"update_root", h.cache[hash].updateRoot.String(),
+		"update_ts", h.cache[hash].updateTS.String())
 }
 
 func (h *HashNodeCache) Get(hash common.Hash) *trienode.Node {
@@ -157,6 +170,14 @@ func (h *HashNodeCache) delNew(hash common.Hash, block uint64, root common.Hash)
 		n.updateRoot = root
 		n.updateTS = time.Now()
 	}
+	log.Info("del cache",
+		"trie_node_hash", hash.String(), "ref_count", h.cache[hash].refCount,
+		"add_block_number", h.cache[hash].block,
+		"add_root", h.cache[hash].root.String(),
+		"add_ts", h.cache[hash].addTS.String(),
+		"update_block_number", h.cache[hash].updateBlock,
+		"update_root", h.cache[hash].updateRoot.String(),
+		"update_ts", h.cache[hash].updateTS.String())
 	if n.refCount == 0 {
 		delete(h.cache, hash)
 	}

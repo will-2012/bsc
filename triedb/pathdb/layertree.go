@@ -110,6 +110,11 @@ func (tree *layerTree) add(root common.Hash, parentRoot common.Hash, block uint6
 	if root == parentRoot {
 		return errors.New("layer cycle")
 	}
+	current := tree.get(root)
+	if current != nil {
+		log.Info("Skip add repeated difflayer", "root", root.String(), "block_id", block)
+		return nil
+	}
 	parent := tree.get(parentRoot)
 	if parent == nil {
 		return fmt.Errorf("triedb parent [%#x] layer missing", parentRoot)

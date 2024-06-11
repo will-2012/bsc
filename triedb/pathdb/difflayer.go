@@ -52,10 +52,11 @@ func (h *HashNodeCache) checkExpire() {
 		select {
 		case <-printTicker.C:
 			h.lock.RLock()
+			log.Info("Print debug cache")
 			count := 0
 			for key, value := range h.cache {
-				if time.Now().Sub(value.addTS) > 180*time.Second {
-					log.Info("check cache",
+				if time.Now().Sub(value.addTS) > 60*time.Second*15 {
+					log.Info("Check cache",
 						"trie_node_hash", key.String(), "ref_count", value.refCount,
 						"add_block_number", value.block,
 						"add_root", value.root.String(),
@@ -64,7 +65,7 @@ func (h *HashNodeCache) checkExpire() {
 						"update_root", value.updateRoot.String(),
 						"update_ts", value.updateTS.String())
 					count++
-					if count >= 3 {
+					if count >= 10 {
 						break
 					}
 				}

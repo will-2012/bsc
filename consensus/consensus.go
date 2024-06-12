@@ -58,6 +58,9 @@ type ChainHeaderReader interface {
 
 	// GetHighestVerifiedHeader retrieves the highest header verified.
 	GetHighestVerifiedHeader() *types.Header
+
+	// ChasingHead return the best chain head of peers.
+	ChasingHead() *types.Header
 }
 
 type VotePool interface {
@@ -93,6 +96,9 @@ type Engine interface {
 	// VerifyUncles verifies that the given block's uncles conform to the consensus
 	// rules of a given engine.
 	VerifyUncles(chain ChainReader, block *types.Block) error
+
+	// NextInTurnValidator return the next in-turn validator for header
+	NextInTurnValidator(chain ChainHeaderReader, header *types.Header) (common.Address, error)
 
 	// Prepare initializes the consensus fields of a block header according to the
 	// rules of a particular engine. The changes are executed inline.

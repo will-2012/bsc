@@ -29,7 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/triedb"
 )
 
 // CurrentHeader retrieves the current head header of the canonical chain. The
@@ -231,7 +231,7 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	if receipts, ok := bc.receiptsCache.Get(hash); ok {
 		return receipts
 	}
-	number := rawdb.ReadHeaderNumber(bc.db, hash)
+	number := rawdb.ReadHeaderNumber(bc.db.BlockStore(), hash)
 	if number == nil {
 		return nil
 	}
@@ -245,6 +245,23 @@ func (bc *BlockChain) GetReceiptsByHash(hash common.Hash) types.Receipts {
 	}
 	bc.receiptsCache.Add(hash, receipts)
 	return receipts
+}
+
+// GetSidecarsByHash retrieves the sidecars for all transactions in a given block.
+func (bc *BlockChain) GetSidecarsByHash(hash common.Hash) types.BlobSidecars {
+	if sidecars, ok := bc.sidecarsCache.Get(hash); ok {
+		return sidecars
+	}
+	number := rawdb.ReadHeaderNumber(bc.db, hash)
+	if number == nil {
+		return nil
+	}
+	sidecars := rawdb.ReadBlobSidecars(bc.db, hash, *number)
+	if sidecars == nil {
+		return nil
+	}
+	bc.sidecarsCache.Add(hash, sidecars)
+	return sidecars
 }
 
 // GetUnclesInChain retrieves all the uncles from a given block backwards until
@@ -379,7 +396,20 @@ func (bc *BlockChain) State() (*state.StateDB, error) {
 
 // StateAt returns a new mutable state based on a particular point in time.
 func (bc *BlockChain) StateAt(root common.Hash) (*state.StateDB, error) {
-	return state.New(root, bc.stateCache, bc.snaps)
+	stateDb, err := state.New(root, bc.stateCache, bc.snaps)
+	if err != nil {
+		return nil, err
+	}
+
+	// If there's no trie and the specified snapshot is not available, getting
+	// any state will by default return nil.
+	// Instead of that, it will be more useful to return an error to indicate
+	// the state is not available.
+	if stateDb.NoTrie() && stateDb.GetSnap() == nil {
+		return nil, errors.New("state is not available")
+	}
+
+	return stateDb, err
 }
 
 // Config retrieves the chain's fork configuration.
@@ -432,8 +462,13 @@ func (bc *BlockChain) TxIndexProgress() (TxIndexProgress, error) {
 }
 
 // TrieDB retrieves the low level trie database used for data storage.
-func (bc *BlockChain) TrieDB() *trie.Database {
+func (bc *BlockChain) TrieDB() *triedb.Database {
 	return bc.triedb
+}
+
+// HeaderChain returns the underlying header chain.
+func (bc *BlockChain) HeaderChain() *HeaderChain {
+	return bc.hc
 }
 
 // SubscribeRemovedLogsEvent registers a subscription of RemovedLogsEvent.
@@ -475,4 +510,13 @@ func (bc *BlockChain) SubscribeBlockProcessingEvent(ch chan<- bool) event.Subscr
 // SubscribeFinalizedHeaderEvent registers a subscription of FinalizedHeaderEvent.
 func (bc *BlockChain) SubscribeFinalizedHeaderEvent(ch chan<- FinalizedHeaderEvent) event.Subscription {
 	return bc.scope.Track(bc.finalizedHeaderFeed.Subscribe(ch))
+}
+
+// AncientTail retrieves the tail the ancients blocks
+func (bc *BlockChain) AncientTail() (uint64, error) {
+	tail, err := bc.db.Tail()
+	if err != nil {
+		return 0, err
+	}
+	return tail, nil
 }

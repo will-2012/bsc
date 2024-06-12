@@ -17,6 +17,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -68,7 +69,7 @@ func (result *ExecutionResult) Revert() []byte {
 }
 
 // IntrinsicGas computes the 'intrinsic gas' for a message with the given data.
-func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation bool, isHomestead, isEIP2028 bool, isEIP3860 bool) (uint64, error) {
+func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation bool, isHomestead, isEIP2028, isEIP3860 bool) (uint64, error) {
 	// Set the starting gas for the raw transaction
 	var gas uint64
 	if isContractCreation && isHomestead {
@@ -397,10 +398,10 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	if st.evm.ChainConfig().IsNano(st.evm.Context.BlockNumber) {
 		for _, blackListAddr := range types.NanoBlackList {
 			if blackListAddr == msg.From {
-				return nil, fmt.Errorf("block blacklist account")
+				return nil, errors.New("block blacklist account")
 			}
 			if msg.To != nil && *msg.To == blackListAddr {
-				return nil, fmt.Errorf("block blacklist account")
+				return nil, errors.New("block blacklist account")
 			}
 		}
 	}
@@ -464,6 +465,13 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	// consensus engine is parlia
 	if st.evm.ChainConfig().Parlia != nil {
 		st.state.AddBalance(consensus.SystemAddress, fee)
+		// add extra blob fee reward
+		if rules.IsCancun {
+			blobFee := new(big.Int).SetUint64(st.blobGasUsed())
+			blobFee.Mul(blobFee, st.evm.Context.BlobBaseFee)
+			blobFeeU256, _ := uint256.FromBig(blobFee)
+			st.state.AddBalance(consensus.SystemAddress, blobFeeU256)
+		}
 	} else {
 		st.state.AddBalance(st.evm.Context.Coinbase, fee)
 	}

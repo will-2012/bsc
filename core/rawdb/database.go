@@ -26,14 +26,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/olekukonko/tablewriter"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/ethdb/leveldb"
 	"github.com/ethereum/go-ethereum/ethdb/memorydb"
 	"github.com/ethereum/go-ethereum/ethdb/pebble"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/olekukonko/tablewriter"
 )
 
 // freezerdb is a database wrapper that enables freezer data retrievals.
@@ -41,7 +40,29 @@ type freezerdb struct {
 	ancientRoot string
 	ethdb.KeyValueStore
 	ethdb.AncientStore
-	diffStore ethdb.KeyValueStore
+	ethdb.AncientFreezer
+	diffStore  ethdb.KeyValueStore
+	stateStore ethdb.Database
+	blockStore ethdb.Database
+}
+
+func (frdb *freezerdb) StateStoreReader() ethdb.Reader {
+	if frdb.stateStore == nil {
+		return frdb
+	}
+	return frdb.stateStore
+}
+
+func (frdb *freezerdb) BlockStoreReader() ethdb.Reader {
+	if frdb.blockStore == nil {
+		return frdb
+	}
+	return frdb.blockStore
+}
+
+func (frdb *freezerdb) BlockStoreWriter() ethdb.Writer {
+	// TODO implement me
+	panic("implement me")
 }
 
 // AncientDatadir returns the path of root ancient directory.
@@ -64,6 +85,16 @@ func (frdb *freezerdb) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	if frdb.stateStore != nil {
+		if err := frdb.stateStore.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if frdb.blockStore != nil {
+		if err := frdb.blockStore.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if len(errs) != 0 {
 		return fmt.Errorf("%v", errs)
 	}
@@ -81,6 +112,36 @@ func (frdb *freezerdb) SetDiffStore(diff ethdb.KeyValueStore) {
 	frdb.diffStore = diff
 }
 
+func (frdb *freezerdb) StateStore() ethdb.Database {
+	return frdb.stateStore
+}
+
+func (frdb *freezerdb) SetStateStore(state ethdb.Database) {
+	if frdb.stateStore != nil {
+		frdb.stateStore.Close()
+	}
+	frdb.stateStore = state
+}
+
+func (frdb *freezerdb) BlockStore() ethdb.Database {
+	if frdb.blockStore != nil {
+		return frdb.blockStore
+	} else {
+		return frdb
+	}
+}
+
+func (frdb *freezerdb) SetBlockStore(block ethdb.Database) {
+	if frdb.blockStore != nil {
+		frdb.blockStore.Close()
+	}
+	frdb.blockStore = block
+}
+
+func (frdb *freezerdb) HasSeparateBlockStore() bool {
+	return frdb.blockStore != nil
+}
+
 // Freeze is a helper method used for external testing to trigger and block until
 // a freeze cycle completes, without having to sleep for a minute to trigger the
 // automatic background run.
@@ -93,7 +154,6 @@ func (frdb *freezerdb) Freeze(threshold uint64) error {
 		frdb.AncientStore.(*chainFreezer).threshold.Store(old)
 	}(frdb.AncientStore.(*chainFreezer).threshold.Load())
 	frdb.AncientStore.(*chainFreezer).threshold.Store(threshold)
-
 	// Trigger a freeze cycle and block until it's done
 	trigger := make(chan struct{}, 1)
 	frdb.AncientStore.(*chainFreezer).trigger <- trigger
@@ -101,10 +161,16 @@ func (frdb *freezerdb) Freeze(threshold uint64) error {
 	return nil
 }
 
+func (frdb *freezerdb) SetupFreezerEnv(env *ethdb.FreezerEnv) error {
+	return frdb.AncientFreezer.SetupFreezerEnv(env)
+}
+
 // nofreezedb is a database wrapper that disables freezer data retrievals.
 type nofreezedb struct {
 	ethdb.KeyValueStore
-	diffStore ethdb.KeyValueStore
+	diffStore  ethdb.KeyValueStore
+	stateStore ethdb.Database
+	blockStore ethdb.Database
 }
 
 // HasAncient returns an error as we don't have a backing chain freezer.
@@ -127,7 +193,7 @@ func (db *nofreezedb) Ancients() (uint64, error) {
 	return 0, errNotSupported
 }
 
-// Ancients returns an error as we don't have a backing chain freezer.
+// ItemAmountInAncient returns an error as we don't have a backing chain freezer.
 func (db *nofreezedb) ItemAmountInAncient() (uint64, error) {
 	return 0, errNotSupported
 }
@@ -157,6 +223,16 @@ func (db *nofreezedb) TruncateTail(items uint64) (uint64, error) {
 	return 0, errNotSupported
 }
 
+// TruncateTableTail will truncate certain table to new tail
+func (db *nofreezedb) TruncateTableTail(kind string, tail uint64) (uint64, error) {
+	return 0, errNotSupported
+}
+
+// ResetTable will reset certain table with new start point
+func (db *nofreezedb) ResetTable(kind string, startAt uint64, onlyEmpty bool) error {
+	return errNotSupported
+}
+
 // Sync returns an error as we don't have a backing chain freezer.
 func (db *nofreezedb) Sync() error {
 	return errNotSupported
@@ -168,6 +244,50 @@ func (db *nofreezedb) DiffStore() ethdb.KeyValueStore {
 
 func (db *nofreezedb) SetDiffStore(diff ethdb.KeyValueStore) {
 	db.diffStore = diff
+}
+
+func (db *nofreezedb) StateStore() ethdb.Database {
+	return db.stateStore
+}
+
+func (db *nofreezedb) SetStateStore(state ethdb.Database) {
+	db.stateStore = state
+}
+
+func (db *nofreezedb) StateStoreReader() ethdb.Reader {
+	if db.stateStore != nil {
+		return db.stateStore
+	}
+	return db
+}
+
+func (db *nofreezedb) BlockStore() ethdb.Database {
+	if db.blockStore != nil {
+		return db.blockStore
+	}
+	return db
+}
+
+func (db *nofreezedb) SetBlockStore(block ethdb.Database) {
+	db.blockStore = block
+}
+
+func (db *nofreezedb) HasSeparateBlockStore() bool {
+	return db.blockStore != nil
+}
+
+func (db *nofreezedb) BlockStoreReader() ethdb.Reader {
+	if db.blockStore != nil {
+		return db.blockStore
+	}
+	return db
+}
+
+func (db *nofreezedb) BlockStoreWriter() ethdb.Writer {
+	if db.blockStore != nil {
+		return db.blockStore
+	}
+	return db
 }
 
 func (db *nofreezedb) ReadAncients(fn func(reader ethdb.AncientReaderOp) error) (err error) {
@@ -201,10 +321,118 @@ func (db *nofreezedb) AncientDatadir() (string, error) {
 	return "", errNotSupported
 }
 
+func (db *nofreezedb) SetupFreezerEnv(env *ethdb.FreezerEnv) error {
+	return nil
+}
+
 // NewDatabase creates a high level database on top of a given key-value data
 // store without a freezer moving immutable chain segments into cold storage.
 func NewDatabase(db ethdb.KeyValueStore) ethdb.Database {
 	return &nofreezedb{KeyValueStore: db}
+}
+
+type emptyfreezedb struct {
+	ethdb.KeyValueStore
+}
+
+// HasAncient returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) HasAncient(kind string, number uint64) (bool, error) {
+	return false, nil
+}
+
+// Ancient returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) Ancient(kind string, number uint64) ([]byte, error) {
+	return nil, nil
+}
+
+// AncientRange returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) AncientRange(kind string, start, max, maxByteSize uint64) ([][]byte, error) {
+	return nil, nil
+}
+
+// Ancients returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) Ancients() (uint64, error) {
+	return 0, nil
+}
+
+// ItemAmountInAncient returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) ItemAmountInAncient() (uint64, error) {
+	return 0, nil
+}
+
+// Tail returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) Tail() (uint64, error) {
+	return 0, nil
+}
+
+// AncientSize returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) AncientSize(kind string) (uint64, error) {
+	return 0, nil
+}
+
+// ModifyAncients returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) ModifyAncients(func(ethdb.AncientWriteOp) error) (int64, error) {
+	return 0, nil
+}
+
+// TruncateHead returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) TruncateHead(items uint64) (uint64, error) {
+	return 0, nil
+}
+
+// TruncateTail returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) TruncateTail(items uint64) (uint64, error) {
+	return 0, nil
+}
+
+// TruncateTableTail returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) TruncateTableTail(kind string, tail uint64) (uint64, error) {
+	return 0, nil
+}
+
+// ResetTable returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) ResetTable(kind string, startAt uint64, onlyEmpty bool) error {
+	return nil
+}
+
+// Sync returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) Sync() error {
+	return nil
+}
+
+func (db *emptyfreezedb) DiffStore() ethdb.KeyValueStore        { return db }
+func (db *emptyfreezedb) SetDiffStore(diff ethdb.KeyValueStore) {}
+func (db *emptyfreezedb) StateStore() ethdb.Database            { return db }
+func (db *emptyfreezedb) SetStateStore(state ethdb.Database)    {}
+func (db *emptyfreezedb) StateStoreReader() ethdb.Reader        { return db }
+func (db *emptyfreezedb) BlockStore() ethdb.Database            { return db }
+func (db *emptyfreezedb) SetBlockStore(block ethdb.Database)    {}
+func (db *emptyfreezedb) HasSeparateBlockStore() bool           { return false }
+func (db *emptyfreezedb) BlockStoreReader() ethdb.Reader        { return db }
+func (db *emptyfreezedb) BlockStoreWriter() ethdb.Writer        { return db }
+func (db *emptyfreezedb) ReadAncients(fn func(reader ethdb.AncientReaderOp) error) (err error) {
+	return nil
+}
+func (db *emptyfreezedb) AncientOffSet() uint64 { return 0 }
+
+// MigrateTable returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) MigrateTable(kind string, convert convertLegacyFn) error {
+	return nil
+}
+
+// AncientDatadir returns nil for pruned db that we don't have a backing chain freezer.
+func (db *emptyfreezedb) AncientDatadir() (string, error) {
+	return "", nil
+}
+func (db *emptyfreezedb) SetupFreezerEnv(env *ethdb.FreezerEnv) error {
+	return nil
+}
+
+// NewEmptyFreezeDB is used for CLI such as `geth db inspect` in pruned db that we don't
+// have a backing chain freezer.
+// WARNING: it must be only used in the above case.
+func NewEmptyFreezeDB(db ethdb.KeyValueStore) ethdb.Database {
+	return &emptyfreezedb{KeyValueStore: db}
 }
 
 // NewFreezerDb only create a freezer without statedb.
@@ -247,13 +475,19 @@ func resolveChainFreezerDir(ancient string) string {
 // value data store with a freezer moving immutable chain segments into cold
 // storage. The passed ancient indicates the path of root ancient directory
 // where the chain freezer can be opened.
-func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, pruneAncientData bool) (ethdb.Database, error) {
+func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace string, readonly, disableFreeze, isLastOffset, pruneAncientData, multiDatabase bool) (ethdb.Database, error) {
 	var offset uint64
 	// The offset of ancientDB should be handled differently in different scenarios.
 	if isLastOffset {
 		offset = ReadOffSetOfLastAncientFreezer(db)
 	} else {
 		offset = ReadOffSetOfCurrentAncientFreezer(db)
+	}
+
+	// This case is used for someone who wants to execute geth db inspect CLI in a pruned db
+	if !disableFreeze && readonly && ReadAncientType(db) == PruneFreezerType {
+		log.Warn("Disk db is pruned, using an empty freezer db for CLI")
+		return NewEmptyFreezeDB(db), nil
 	}
 
 	if pruneAncientData && !disableFreeze && !readonly {
@@ -267,9 +501,10 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 			WriteAncientType(db, PruneFreezerType)
 		}
 		return &freezerdb{
-			ancientRoot:   ancient,
-			KeyValueStore: db,
-			AncientStore:  frdb,
+			ancientRoot:    ancient,
+			KeyValueStore:  db,
+			AncientStore:   frdb,
+			AncientFreezer: frdb,
 		}, nil
 	}
 
@@ -282,7 +517,7 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 	}
 
 	// Create the idle freezer instance
-	frdb, err := newChainFreezer(resolveChainFreezerDir(ancient), namespace, readonly, offset)
+	frdb, err := newChainFreezer(resolveChainFreezerDir(ancient), namespace, readonly, offset, multiDatabase)
 	if err != nil {
 		printChainMetadata(db)
 		return nil, err
@@ -369,6 +604,7 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 			// freezer.
 		}
 	}
+
 	// no prune ancient start success
 	if !readonly {
 		WriteAncientType(db, EntireFreezerType)
@@ -382,9 +618,10 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 		}()
 	}
 	return &freezerdb{
-		ancientRoot:   ancient,
-		KeyValueStore: db,
-		AncientStore:  frdb,
+		ancientRoot:    ancient,
+		KeyValueStore:  db,
+		AncientStore:   frdb,
+		AncientFreezer: frdb,
 	}, nil
 }
 
@@ -457,16 +694,19 @@ type OpenOptions struct {
 	DisableFreeze    bool
 	IsLastOffset     bool
 	PruneAncientData bool
+
 	// Ephemeral means that filesystem sync operations should be avoided: data integrity in the face of
 	// a crash is not important. This option should typically be used in tests.
 	Ephemeral bool
+
+	MultiDataBase bool
 }
 
 // openKeyValueDatabase opens a disk-based key-value database, e.g. leveldb or pebble.
 //
 //	                      type == null          type != null
 //	                   +----------------------------------------
-//	db is non-existent |  leveldb default  |  specified type
+//	db is non-existent |  pebble default  |  specified type
 //	db is existent     |  from db         |  specified type (if compatible)
 func openKeyValueDatabase(o OpenOptions) (ethdb.Database, error) {
 	// Reject any unsupported database type
@@ -487,12 +727,9 @@ func openKeyValueDatabase(o OpenOptions) (ethdb.Database, error) {
 		log.Info("Using leveldb as the backing database")
 		return NewLevelDBDatabase(o.Directory, o.Cache, o.Handles, o.Namespace, o.ReadOnly)
 	}
-	// No pre-existing database, no user-requested one either. Default to Pebble
-	// on supported platforms and LevelDB on anything else.
-	// 	log.Info("Defaulting to pebble as the backing database")
-	// 	return NewPebbleDBDatabase(o.Directory, o.Cache, o.Handles, o.Namespace, o.ReadOnly)
-	log.Info("Defaulting to leveldb as the backing database")
-	return NewLevelDBDatabase(o.Directory, o.Cache, o.Handles, o.Namespace, o.ReadOnly)
+	// No pre-existing database, no user-requested one either. Default to Pebble.
+	log.Info("Defaulting to pebble as the backing database")
+	return NewPebbleDBDatabase(o.Directory, o.Cache, o.Handles, o.Namespace, o.ReadOnly, o.Ephemeral)
 }
 
 // Open opens both a disk-based key-value database such as leveldb or pebble, but also
@@ -507,13 +744,13 @@ func Open(o OpenOptions) (ethdb.Database, error) {
 	}
 	if ReadAncientType(kvdb) == PruneFreezerType {
 		if !o.PruneAncientData {
-			log.Warn("Disk db is pruned")
+			log.Warn("NOTICE: You're opening a pruned disk db!")
 		}
 	}
 	if len(o.AncientsDirectory) == 0 {
 		return kvdb, nil
 	}
-	frdb, err := NewDatabaseWithFreezer(kvdb, o.AncientsDirectory, o.Namespace, o.ReadOnly, o.DisableFreeze, o.IsLastOffset, o.PruneAncientData)
+	frdb, err := NewDatabaseWithFreezer(kvdb, o.AncientsDirectory, o.Namespace, o.ReadOnly, o.DisableFreeze, o.IsLastOffset, o.PruneAncientData, o.MultiDataBase)
 	if err != nil {
 		kvdb.Close()
 		return nil, err
@@ -555,7 +792,7 @@ func AncientInspect(db ethdb.Database) error {
 	offset := counter(ReadOffSetOfCurrentAncientFreezer(db))
 	// Get number of ancient rows inside the freezer.
 	ancients := counter(0)
-	if count, err := db.ItemAmountInAncient(); err != nil {
+	if count, err := db.BlockStore().ItemAmountInAncient(); err != nil {
 		log.Error("failed to get the items amount in ancientDB", "err", err)
 		return err
 	} else {
@@ -603,12 +840,64 @@ func PruneHashTrieNodeInDataBase(db ethdb.Database) error {
 	return nil
 }
 
+type DataType int
+
+const (
+	StateDataType DataType = iota
+	BlockDataType
+	ChainDataType
+	Unknown
+)
+
+func DataTypeByKey(key []byte) DataType {
+	switch {
+	// state
+	case IsLegacyTrieNode(key, key),
+		bytes.HasPrefix(key, stateIDPrefix) && len(key) == len(stateIDPrefix)+common.HashLength,
+		IsAccountTrieNode(key),
+		IsStorageTrieNode(key):
+		return StateDataType
+
+	// block
+	case bytes.HasPrefix(key, headerPrefix) && len(key) == (len(headerPrefix)+8+common.HashLength),
+		bytes.HasPrefix(key, blockBodyPrefix) && len(key) == (len(blockBodyPrefix)+8+common.HashLength),
+		bytes.HasPrefix(key, blockReceiptsPrefix) && len(key) == (len(blockReceiptsPrefix)+8+common.HashLength),
+		bytes.HasPrefix(key, headerPrefix) && bytes.HasSuffix(key, headerTDSuffix),
+		bytes.HasPrefix(key, headerPrefix) && bytes.HasSuffix(key, headerHashSuffix),
+		bytes.HasPrefix(key, headerNumberPrefix) && len(key) == (len(headerNumberPrefix)+common.HashLength):
+		return BlockDataType
+	default:
+		for _, meta := range [][]byte{
+			fastTrieProgressKey, persistentStateIDKey, trieJournalKey, snapSyncStatusFlagKey} {
+			if bytes.Equal(key, meta) {
+				return StateDataType
+			}
+		}
+		for _, meta := range [][]byte{headHeaderKey, headFinalizedBlockKey} {
+			if bytes.Equal(key, meta) {
+				return BlockDataType
+			}
+		}
+		return ChainDataType
+	}
+}
+
 // InspectDatabase traverses the entire database and checks the size
 // of all different categories of data.
 func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 	it := db.NewIterator(keyPrefix, keyStart)
 	defer it.Release()
 
+	var trieIter ethdb.Iterator
+	var blockIter ethdb.Iterator
+	if db.StateStore() != nil {
+		trieIter = db.StateStore().NewIterator(keyPrefix, nil)
+		defer trieIter.Release()
+	}
+	if db.HasSeparateBlockStore() {
+		blockIter = db.BlockStore().NewIterator(keyPrefix, nil)
+		defer blockIter.Release()
+	}
 	var (
 		count  int64
 		start  = time.Now()
@@ -659,14 +948,14 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 			bodies.Add(size)
 		case bytes.HasPrefix(key, blockReceiptsPrefix) && len(key) == (len(blockReceiptsPrefix)+8+common.HashLength):
 			receipts.Add(size)
+		case IsLegacyTrieNode(key, it.Value()):
+			legacyTries.Add(size)
 		case bytes.HasPrefix(key, headerPrefix) && bytes.HasSuffix(key, headerTDSuffix):
 			tds.Add(size)
 		case bytes.HasPrefix(key, headerPrefix) && bytes.HasSuffix(key, headerHashSuffix):
 			numHashPairings.Add(size)
 		case bytes.HasPrefix(key, headerNumberPrefix) && len(key) == (len(headerNumberPrefix)+common.HashLength):
 			hashNumPairings.Add(size)
-		case IsLegacyTrieNode(key, it.Value()):
-			legacyTries.Add(size)
 		case bytes.HasPrefix(key, stateIDPrefix) && len(key) == len(stateIDPrefix)+common.HashLength:
 			stateLookups.Add(size)
 		case IsAccountTrieNode(key):
@@ -728,6 +1017,96 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 			logged = time.Now()
 		}
 	}
+	// inspect separate trie db
+	if trieIter != nil {
+		count = 0
+		logged = time.Now()
+		for trieIter.Next() {
+			var (
+				key   = trieIter.Key()
+				value = trieIter.Value()
+				size  = common.StorageSize(len(key) + len(value))
+			)
+			total += size
+
+			switch {
+			case IsLegacyTrieNode(key, value):
+				legacyTries.Add(size)
+			case bytes.HasPrefix(key, stateIDPrefix) && len(key) == len(stateIDPrefix)+common.HashLength:
+				stateLookups.Add(size)
+			case IsAccountTrieNode(key):
+				accountTries.Add(size)
+			case IsStorageTrieNode(key):
+				storageTries.Add(size)
+			default:
+				var accounted bool
+				for _, meta := range [][]byte{
+					fastTrieProgressKey, persistentStateIDKey, trieJournalKey, snapSyncStatusFlagKey} {
+					if bytes.Equal(key, meta) {
+						metadata.Add(size)
+						accounted = true
+						break
+					}
+				}
+				if !accounted {
+					unaccounted.Add(size)
+				}
+			}
+			count++
+			if count%1000 == 0 && time.Since(logged) > 8*time.Second {
+				log.Info("Inspecting separate state database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+				logged = time.Now()
+			}
+		}
+		log.Info("Inspecting separate state database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+	}
+	// inspect separate block db
+	if blockIter != nil {
+		count = 0
+		logged = time.Now()
+
+		for blockIter.Next() {
+			var (
+				key   = blockIter.Key()
+				value = blockIter.Value()
+				size  = common.StorageSize(len(key) + len(value))
+			)
+			total += size
+
+			switch {
+			case bytes.HasPrefix(key, headerPrefix) && len(key) == (len(headerPrefix)+8+common.HashLength):
+				headers.Add(size)
+			case bytes.HasPrefix(key, blockBodyPrefix) && len(key) == (len(blockBodyPrefix)+8+common.HashLength):
+				bodies.Add(size)
+			case bytes.HasPrefix(key, blockReceiptsPrefix) && len(key) == (len(blockReceiptsPrefix)+8+common.HashLength):
+				receipts.Add(size)
+			case bytes.HasPrefix(key, headerPrefix) && bytes.HasSuffix(key, headerTDSuffix):
+				tds.Add(size)
+			case bytes.HasPrefix(key, headerPrefix) && bytes.HasSuffix(key, headerHashSuffix):
+				numHashPairings.Add(size)
+			case bytes.HasPrefix(key, headerNumberPrefix) && len(key) == (len(headerNumberPrefix)+common.HashLength):
+				hashNumPairings.Add(size)
+			default:
+				var accounted bool
+				for _, meta := range [][]byte{headHeaderKey, headFinalizedBlockKey} {
+					if bytes.Equal(key, meta) {
+						metadata.Add(size)
+						accounted = true
+						break
+					}
+				}
+				if !accounted {
+					unaccounted.Add(size)
+				}
+			}
+			count++
+			if count%1000 == 0 && time.Since(logged) > 8*time.Second {
+				log.Info("Inspecting separate block database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+				logged = time.Now()
+			}
+		}
+		log.Info("Inspecting separate block database", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+	}
 	// Display the database statistic of key-value store.
 	stats := [][]string{
 		{"Key-Value store", "Headers", headers.Size(), headers.Count()},
@@ -753,7 +1132,7 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		{"Light client", "Bloom trie nodes", bloomTrieNodes.Size(), bloomTrieNodes.Count()},
 	}
 	// Inspect all registered append-only file store then.
-	ancients, err := inspectFreezers(db)
+	ancients, err := inspectFreezers(db.BlockStore())
 	if err != nil {
 		return err
 	}
@@ -768,6 +1147,28 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 		}
 		total += ancient.size()
 	}
+
+	// inspect ancient state in separate trie db if exist
+	if trieIter != nil {
+		stateAncients, err := inspectFreezers(db.StateStore())
+		if err != nil {
+			return err
+		}
+		for _, ancient := range stateAncients {
+			for _, table := range ancient.sizes {
+				if ancient.name == "chain" {
+					break
+				}
+				stats = append(stats, []string{
+					fmt.Sprintf("Ancient store (%s)", strings.Title(ancient.name)),
+					strings.Title(table.name),
+					table.size.String(),
+					fmt.Sprintf("%d", ancient.count()),
+				})
+			}
+			total += ancient.size()
+		}
+	}
 	table := tablewriter.NewWriter(os.Stdout)
 	table.SetHeader([]string{"Database", "Category", "Size", "Items"})
 	table.SetFooter([]string{"", "Total", total.String(), " "})
@@ -777,6 +1178,62 @@ func InspectDatabase(db ethdb.Database, keyPrefix, keyStart []byte) error {
 	if unaccounted.size > 0 {
 		log.Error("Database contains unaccounted data", "size", unaccounted.size, "count", unaccounted.count)
 	}
+	return nil
+}
+
+func DeleteTrieState(db ethdb.Database) error {
+	var (
+		it     ethdb.Iterator
+		batch  = db.NewBatch()
+		start  = time.Now()
+		logged = time.Now()
+		count  int64
+		key    []byte
+	)
+
+	prefixKeys := map[string]func([]byte) bool{
+		string(trieNodeAccountPrefix): IsAccountTrieNode,
+		string(trieNodeStoragePrefix): IsStorageTrieNode,
+		string(stateIDPrefix):         func(key []byte) bool { return len(key) == len(stateIDPrefix)+common.HashLength },
+	}
+
+	for prefix, isValid := range prefixKeys {
+		it = db.NewIterator([]byte(prefix), nil)
+
+		for it.Next() {
+			key = it.Key()
+			if !isValid(key) {
+				continue
+			}
+
+			batch.Delete(it.Key())
+			if batch.ValueSize() > ethdb.IdealBatchSize {
+				if err := batch.Write(); err != nil {
+					it.Release()
+					return err
+				}
+				batch.Reset()
+			}
+
+			count++
+			if time.Since(logged) > 8*time.Second {
+				log.Info("Deleting trie state", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+				logged = time.Now()
+			}
+		}
+
+		it.Release()
+	}
+
+	if batch.ValueSize() > 0 {
+		if err := batch.Write(); err != nil {
+			return err
+		}
+		batch.Reset()
+	}
+
+	log.Info("Deleted trie state", "count", count, "elapsed", common.PrettyDuration(time.Since(start)))
+
 	return nil
 }
 
@@ -804,6 +1261,29 @@ func ReadChainMetadata(db ethdb.KeyValueStore) [][]string {
 		{"headBlockHash", fmt.Sprintf("%v", ReadHeadBlockHash(db))},
 		{"headFastBlockHash", fmt.Sprintf("%v", ReadHeadFastBlockHash(db))},
 		{"headHeaderHash", fmt.Sprintf("%v", ReadHeadHeaderHash(db))},
+		{"lastPivotNumber", pp(ReadLastPivotNumber(db))},
+		{"len(snapshotSyncStatus)", fmt.Sprintf("%d bytes", len(ReadSnapshotSyncStatus(db)))},
+		{"snapshotDisabled", fmt.Sprintf("%v", ReadSnapshotDisabled(db))},
+		{"snapshotJournal", fmt.Sprintf("%d bytes", len(ReadSnapshotJournal(db)))},
+		{"snapshotRecoveryNumber", pp(ReadSnapshotRecoveryNumber(db))},
+		{"snapshotRoot", fmt.Sprintf("%v", ReadSnapshotRoot(db))},
+		{"txIndexTail", pp(ReadTxIndexTail(db))},
+	}
+	return data
+}
+
+func ReadChainMetadataFromMultiDatabase(db ethdb.Database) [][]string {
+	pp := func(val *uint64) string {
+		if val == nil {
+			return "<nil>"
+		}
+		return fmt.Sprintf("%d (%#x)", *val, *val)
+	}
+	data := [][]string{
+		{"databaseVersion", pp(ReadDatabaseVersion(db))},
+		{"headBlockHash", fmt.Sprintf("%v", ReadHeadBlockHash(db.BlockStore()))},
+		{"headFastBlockHash", fmt.Sprintf("%v", ReadHeadFastBlockHash(db))},
+		{"headHeaderHash", fmt.Sprintf("%v", ReadHeadHeaderHash(db.BlockStore()))},
 		{"lastPivotNumber", pp(ReadLastPivotNumber(db))},
 		{"len(snapshotSyncStatus)", fmt.Sprintf("%d bytes", len(ReadSnapshotSyncStatus(db)))},
 		{"snapshotDisabled", fmt.Sprintf("%v", ReadSnapshotDisabled(db))},

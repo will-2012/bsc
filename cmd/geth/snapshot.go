@@ -43,8 +43,11 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/triedb"
+	"github.com/ethereum/go-ethereum/triedb/pathdb"
 	cli "github.com/urfave/cli/v2"
 )
 
@@ -91,7 +94,7 @@ WARNING: it's only supported in hash mode(--state.scheme=hash)".
 geth offline prune-block for block data in ancientdb.
 The amount of blocks expected for remaining after prune can be specified via block-amount-reserved in this command,
 will prune and only remain the specified amount of old block data in ancientdb.
-the brief workflow is to backup the the number of this specified amount blocks backward in original ancientdb 
+the brief workflow is to backup the number of this specified amount blocks backward in original ancientdb
 into new ancient_backup, then delete the original ancientdb dir and rename the ancient_backup to original one for replacement,
 finally assemble the statedb and new ancientDb together.
 The purpose of doing it is because the block data will be moved into the ancient store when it
@@ -244,7 +247,16 @@ func accessDb(ctx *cli.Context, stack *node.Node) (ethdb.Database, error) {
 		NoBuild:    true,
 		AsyncBuild: false,
 	}
-	snaptree, err := snapshot.New(snapconfig, chaindb, trie.NewDatabase(chaindb, nil), headBlock.Root(), TriesInMemory, false)
+	dbScheme := rawdb.ReadStateScheme(chaindb)
+	var config *triedb.Config
+	if dbScheme == rawdb.PathScheme {
+		config = &triedb.Config{
+			PathDB: utils.PathDBConfigAddJournalFilePath(stack, pathdb.ReadOnly),
+		}
+	} else if dbScheme == rawdb.HashScheme {
+		config = triedb.HashDefaults
+	}
+	snaptree, err := snapshot.New(snapconfig, chaindb, triedb.NewDatabase(chaindb, config), headBlock.Root(), TriesInMemory, false)
 	if err != nil {
 		log.Error("snaptree error", "err", err)
 		return nil, err // The relevant snapshot(s) might not exist
@@ -332,6 +344,9 @@ func pruneBlock(ctx *cli.Context) error {
 	stack, config = makeConfigNode(ctx)
 	defer stack.Close()
 	blockAmountReserved = ctx.Uint64(utils.BlockAmountReserved.Name)
+	if blockAmountReserved < params.FullImmutabilityThreshold {
+		return fmt.Errorf("block-amount-reserved must be greater than or equal to %d", params.FullImmutabilityThreshold)
+	}
 	chaindb, err = accessDb(ctx, stack)
 	if err != nil {
 		return err
@@ -354,7 +369,15 @@ func pruneBlock(ctx *cli.Context) error {
 	if !ctx.IsSet(utils.AncientFlag.Name) {
 		return errors.New("datadir.ancient must be set")
 	} else {
-		oldAncientPath = ctx.String(utils.AncientFlag.Name)
+		if stack.CheckIfMultiDataBase() {
+			ancientPath := ctx.String(utils.AncientFlag.Name)
+			index := strings.LastIndex(ancientPath, "/ancient/chain")
+			if index != -1 {
+				oldAncientPath = ancientPath[:index] + "/block/ancient/chain"
+			}
+		} else {
+			oldAncientPath = ctx.String(utils.AncientFlag.Name)
+		}
 		if !filepath.IsAbs(oldAncientPath) {
 			// force absolute paths, which often fail due to the splicing of relative paths
 			return errors.New("datadir.ancient not abs path")
@@ -400,7 +423,7 @@ func pruneBlock(ctx *cli.Context) error {
 	}
 
 	if _, err := os.Stat(newAncientPath); err == nil {
-		// No file lock found for old ancientDB but new ancientDB exsisted, indicating the geth was interrupted
+		// No file lock found for old ancientDB but new ancientDB existed, indicating the geth was interrupted
 		// after old ancientDB removal, this happened after backup successfully, so just rename the new ancientDB
 		if err := blockpruner.AncientDbReplacer(); err != nil {
 			log.Error("Failed to rename new ancient directory")
@@ -436,13 +459,15 @@ func pruneState(ctx *cli.Context) error {
 	chaindb := utils.MakeChainDatabase(ctx, stack, false, false)
 	defer chaindb.Close()
 
-	if rawdb.ReadStateScheme(chaindb) != rawdb.HashScheme {
-		log.Crit("Offline pruning is not required for path scheme")
-	}
 	prunerconfig := pruner.Config{
 		Datadir:   stack.ResolvePath(""),
 		BloomSize: ctx.Uint64(utils.BloomFilterSizeFlag.Name),
 	}
+
+	if rawdb.ReadStateScheme(chaindb) != rawdb.HashScheme {
+		log.Crit("Offline pruning is not required for path scheme")
+	}
+
 	pruner, err := pruner.NewPruner(chaindb, prunerconfig, ctx.Uint64(utils.TriesInMemoryFlag.Name))
 	if err != nil {
 		log.Error("Failed to open snapshot tree", "err", err)
@@ -521,7 +546,7 @@ func verifyState(ctx *cli.Context) error {
 		log.Error("Failed to load head block")
 		return errors.New("no head block")
 	}
-	triedb := utils.MakeTrieDatabase(ctx, chaindb, false, true, false)
+	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
 	snapConfig := snapshot.Config{
@@ -576,7 +601,7 @@ func traverseState(ctx *cli.Context) error {
 	chaindb := utils.MakeChainDatabase(ctx, stack, true, false)
 	defer chaindb.Close()
 
-	triedb := utils.MakeTrieDatabase(ctx, chaindb, false, true, false)
+	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
 	headBlock := rawdb.ReadHeadBlock(chaindb)
@@ -685,7 +710,7 @@ func traverseRawState(ctx *cli.Context) error {
 	chaindb := utils.MakeChainDatabase(ctx, stack, true, false)
 	defer chaindb.Close()
 
-	triedb := utils.MakeTrieDatabase(ctx, chaindb, false, true, false)
+	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
 	headBlock := rawdb.ReadHeadBlock(chaindb)
@@ -849,7 +874,8 @@ func dumpState(ctx *cli.Context) error {
 	if err != nil {
 		return err
 	}
-	triedb := utils.MakeTrieDatabase(ctx, db, false, true, false)
+	defer db.Close()
+	triedb := utils.MakeTrieDatabase(ctx, stack, db, false, true, false)
 	defer triedb.Close()
 
 	snapConfig := snapshot.Config{
@@ -932,7 +958,7 @@ func snapshotExportPreimages(ctx *cli.Context) error {
 	chaindb := utils.MakeChainDatabase(ctx, stack, true, false)
 	defer chaindb.Close()
 
-	triedb := utils.MakeTrieDatabase(ctx, chaindb, false, true, false)
+	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
 	var root common.Hash

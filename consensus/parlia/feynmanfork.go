@@ -3,7 +3,7 @@ package parlia
 import (
 	"container/heap"
 	"context"
-	"fmt"
+	"errors"
 	"math"
 	"math/big"
 
@@ -15,14 +15,13 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-const SecondsPerDay uint64 = 86400
-
 // the params should be two blocks' time(timestamp)
 func sameDayInUTC(first, second uint64) bool {
-	return first/SecondsPerDay == second/SecondsPerDay
+	return first/params.BreatheBlockInterval == second/params.BreatheBlockInterval
 }
 
 func isBreatheBlock(lastBlockTime, blockTime uint64) bool {
@@ -159,7 +158,7 @@ func (p *Parlia) getValidatorElectionInfo(blockNr rpc.BlockNumberOrHash) ([]Vali
 		return nil, err
 	}
 	if totalLength.Int64() != int64(len(validators)) || totalLength.Int64() != int64(len(votingPowers)) || totalLength.Int64() != int64(len(voteAddrs)) {
-		return nil, fmt.Errorf("validator length not match")
+		return nil, errors.New("validator length not match")
 	}
 
 	validatorItems := make([]ValidatorItem, len(validators))

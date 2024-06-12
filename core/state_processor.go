@@ -76,7 +76,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 
 	lastBlock := p.bc.GetBlockByHash(block.ParentHash())
 	if lastBlock == nil {
-		return statedb, nil, nil, 0, fmt.Errorf("could not get parent block")
+		return statedb, nil, nil, 0, errors.New("could not get parent block")
 	}
 	if !p.config.IsFeynman(block.Number(), block.Time()) {
 		// Handle upgrade build-in system contract code
@@ -111,6 +111,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			} else if isSystemTx {
 				systemTxs = append(systemTxs, tx)
 				continue
+			}
+		}
+		if p.config.IsCancun(block.Number(), block.Time()) {
+			if len(systemTxs) > 0 {
+				// systemTxs should be always at the end of block.
+				return statedb, nil, nil, 0, fmt.Errorf("normal tx %d [%v] after systemTx", i, tx.Hash().Hex())
 			}
 		}
 
@@ -233,11 +239,11 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, vmenv *vm.EVM, statedb *stat
 		GasPrice:  common.Big0,
 		GasFeeCap: common.Big0,
 		GasTipCap: common.Big0,
-		To:        &params.BeaconRootsStorageAddress,
+		To:        &params.BeaconRootsAddress,
 		Data:      beaconRoot[:],
 	}
 	vmenv.Reset(NewEVMTxContext(msg), statedb)
-	statedb.AddAddressToAccessList(params.BeaconRootsStorageAddress)
+	statedb.AddAddressToAccessList(params.BeaconRootsAddress)
 	_, _, _ = vmenv.Call(vm.AccountRef(msg.From), *msg.To, msg.Data, 30_000_000, common.U2560)
 	statedb.Finalise(true)
 }

@@ -36,7 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/triedb"
 )
 
 var (
@@ -49,7 +49,7 @@ var (
 	maxQueuedHeaders            = 32 * 1024                         // [eth/62] Maximum number of headers to queue for import (DOS protection)
 	maxHeadersProcess           = 2048                              // Number of header download results to import at once into the chain
 	maxResultsProcess           = 2048                              // Number of content download results to import at once into the chain
-	fullMaxForkAncestry  uint64 = params.FullImmutabilityThreshold  // Maximum chain reorganisation (locally redeclared so tests can reduce it)
+	FullMaxForkAncestry  uint64 = params.FullImmutabilityThreshold  // Maximum chain reorganisation (locally redeclared so tests can reduce it)
 	lightMaxForkAncestry uint64 = params.LightImmutabilityThreshold // Maximum chain reorganisation (locally redeclared so tests can reduce it)
 
 	reorgProtThreshold   = 48 // Threshold number of recent blocks to disable mini reorg protection
@@ -205,7 +205,13 @@ type BlockChain interface {
 
 	// TrieDB retrieves the low level trie database used for interacting
 	// with trie nodes.
-	TrieDB() *trie.Database
+	TrieDB() *triedb.Database
+
+	// UpdateChasingHead update remote best chain head, used by DA check now.
+	UpdateChasingHead(head *types.Header)
+
+	// AncientTail retrieves the tail the ancients blocks
+	AncientTail() (uint64, error)
 }
 
 type DownloadOption func(downloader *Downloader) *Downloader
@@ -547,8 +553,8 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 
 		// Legacy sync, use the best announcement we have from the remote peer.
 		// TODO(karalabe): Drop this pathway.
-		if remoteHeight > fullMaxForkAncestry+1 {
-			d.ancientLimit = remoteHeight - fullMaxForkAncestry - 1
+		if remoteHeight > FullMaxForkAncestry+1 {
+			d.ancientLimit = remoteHeight - FullMaxForkAncestry - 1
 		} else {
 			d.ancientLimit = 0
 		}
@@ -567,6 +573,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 			if err := d.lightchain.SetHead(origin); err != nil {
 				return err
 			}
+			log.Info("Truncated excess ancient chain segment", "oldhead", frozen-1, "newhead", origin)
 		}
 	}
 	// Initiate the sync using a concurrent header and content retrieval algorithm
@@ -590,6 +597,8 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td, ttd *
 	} else if mode == FullSync {
 		fetchers = append(fetchers, func() error { return d.processFullSyncContent(ttd, beaconMode) })
 	}
+	// update the chasing head
+	d.blockchain.UpdateChasingHead(remoteHeader)
 	return d.spawnSync(fetchers)
 }
 
@@ -783,7 +792,7 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 	p.log.Debug("Looking for common ancestor", "local", localHeight, "remote", remoteHeight)
 
 	// Recap floor value for binary search
-	maxForkAncestry := fullMaxForkAncestry
+	maxForkAncestry := FullMaxForkAncestry
 	if d.getMode() == LightSync {
 		maxForkAncestry = lightMaxForkAncestry
 	}
@@ -791,6 +800,11 @@ func (d *Downloader) findAncestor(p *peerConnection, localHeight uint64, remoteH
 		// We're above the max reorg threshold, find the earliest fork point
 		floor = int64(localHeight - maxForkAncestry)
 	}
+	// if we have pruned too much history, reset the floor
+	if tail, err := d.blockchain.AncientTail(); err == nil && tail > uint64(floor) {
+		floor = int64(tail)
+	}
+
 	// If we're doing a light sync, ensure the floor doesn't go below the CHT, as
 	// all headers before that point will be missing.
 	if mode == LightSync {
@@ -1383,7 +1397,7 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	)
 	blocks := make([]*types.Block, len(results))
 	for i, result := range results {
-		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(result.Transactions, result.Uncles).WithWithdrawals(result.Withdrawals)
+		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(result.Transactions, result.Uncles).WithWithdrawals(result.Withdrawals).WithSidecars(result.Sidecars)
 	}
 	// Downloaded blocks are always regarded as trusted after the
 	// transition. Because the downloaded chain is guided by the
@@ -1594,7 +1608,7 @@ func (d *Downloader) commitSnapSyncData(results []*fetchResult, stateSync *state
 	blocks := make([]*types.Block, len(results))
 	receipts := make([]types.Receipts, len(results))
 	for i, result := range results {
-		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(result.Transactions, result.Uncles).WithWithdrawals(result.Withdrawals)
+		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(result.Transactions, result.Uncles).WithWithdrawals(result.Withdrawals).WithSidecars(result.Sidecars)
 		receipts[i] = result.Receipts
 	}
 	if index, err := d.blockchain.InsertReceiptChain(blocks, receipts, d.ancientLimit); err != nil {
@@ -1605,7 +1619,7 @@ func (d *Downloader) commitSnapSyncData(results []*fetchResult, stateSync *state
 }
 
 func (d *Downloader) commitPivotBlock(result *fetchResult) error {
-	block := types.NewBlockWithHeader(result.Header).WithBody(result.Transactions, result.Uncles).WithWithdrawals(result.Withdrawals)
+	block := types.NewBlockWithHeader(result.Header).WithBody(result.Transactions, result.Uncles).WithWithdrawals(result.Withdrawals).WithSidecars(result.Sidecars)
 	log.Debug("Committing snap sync pivot as new head", "number", block.Number(), "hash", block.Hash())
 
 	// Commit the pivot block as the new head, will require full sync from here on

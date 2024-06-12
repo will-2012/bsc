@@ -32,7 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/holiman/uint256"
 )
 
@@ -52,6 +52,9 @@ type BlockGen struct {
 	withdrawals []*types.Withdrawal
 
 	engine consensus.Engine
+
+	// extra data of block
+	sidecars types.BlobSidecars
 }
 
 // SetCoinbase sets the coinbase of the generated block.
@@ -84,7 +87,7 @@ func (b *BlockGen) SetDifficulty(diff *big.Int) {
 	b.header.Difficulty = diff
 }
 
-// SetPos makes the header a PoS-header (0 difficulty)
+// SetPoS makes the header a PoS-header (0 difficulty)
 func (b *BlockGen) SetPoS() {
 	b.header.Difficulty = new(big.Int)
 }
@@ -171,6 +174,11 @@ func (b *BlockGen) AddUncheckedTx(tx *types.Transaction) {
 	b.txs = append(b.txs, tx)
 }
 
+// AddBlobSidecar add block's blob sidecar for DA checking.
+func (b *BlockGen) AddBlobSidecar(sidecar *types.BlobSidecar) {
+	b.sidecars = append(b.sidecars, sidecar)
+}
+
 // Number returns the block number of the block being generated.
 func (b *BlockGen) Number() *big.Int {
 	return new(big.Int).Set(b.header.Number)
@@ -184,6 +192,15 @@ func (b *BlockGen) Timestamp() uint64 {
 // BaseFee returns the EIP-1559 base fee of the block being generated.
 func (b *BlockGen) BaseFee() *big.Int {
 	return new(big.Int).Set(b.header.BaseFee)
+}
+
+// ExcessBlobGas returns the EIP-4844 ExcessBlobGas of the block.
+func (b *BlockGen) ExcessBlobGas() uint64 {
+	excessBlobGas := b.header.ExcessBlobGas
+	if excessBlobGas == nil {
+		return 0
+	}
+	return *excessBlobGas
 }
 
 // Gas returns the amount of gas left in the current block.
@@ -313,7 +330,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 	}
 	cm := newChainMaker(parent, config, engine)
 
-	genblock := func(i int, parent *types.Block, triedb *trie.Database, statedb *state.StateDB) (*types.Block, types.Receipts) {
+	genblock := func(i int, parent *types.Block, triedb *triedb.Database, statedb *state.StateDB) (*types.Block, types.Receipts) {
 		b := &BlockGen{i: i, cm: cm, parent: parent, statedb: statedb, engine: engine}
 		b.header = cm.makeHeader(parent, statedb, b.engine)
 
@@ -355,6 +372,16 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 			if err != nil {
 				panic(err)
 			}
+			if block.Header().EmptyWithdrawalsHash() {
+				block = block.WithWithdrawals(make([]*types.Withdrawal, 0))
+			}
+			if config.IsCancun(block.Number(), block.Time()) {
+				for _, s := range b.sidecars {
+					s.BlockNumber = block.Number()
+					s.BlockHash = block.Hash()
+				}
+				block = block.WithSidecars(b.sidecars)
+			}
 
 			// Write state changes to db
 			root, _, err := statedb.Commit(b.header.Number.Uint64(), nil)
@@ -370,7 +397,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 	}
 
 	// Forcibly use hash-based state scheme for retaining all nodes in disk.
-	triedb := trie.NewDatabase(db, trie.HashDefaults)
+	triedb := triedb.NewDatabase(db, triedb.HashDefaults)
 	defer triedb.Close()
 
 	for i := 0; i < n; i++ {
@@ -415,7 +442,7 @@ func GenerateChain(config *params.ChainConfig, parent *types.Block, engine conse
 // then generate chain on top.
 func GenerateChainWithGenesis(genesis *Genesis, engine consensus.Engine, n int, gen func(int, *BlockGen)) (ethdb.Database, []*types.Block, []types.Receipts) {
 	db := rawdb.NewMemoryDatabase()
-	triedb := trie.NewDatabase(db, trie.HashDefaults)
+	triedb := triedb.NewDatabase(db, triedb.HashDefaults)
 	defer triedb.Close()
 	_, err := genesis.Commit(db, triedb)
 	if err != nil {
@@ -456,7 +483,12 @@ func (cm *chainMaker) makeHeader(parent *types.Block, state *state.StateDB, engi
 		excessBlobGas := eip4844.CalcExcessBlobGas(parentExcessBlobGas, parentBlobGasUsed)
 		header.ExcessBlobGas = &excessBlobGas
 		header.BlobGasUsed = new(uint64)
-		header.ParentBeaconRoot = new(common.Hash)
+		if cm.config.Parlia != nil {
+			header.WithdrawalsHash = &types.EmptyWithdrawalsHash
+		}
+		if cm.config.Parlia == nil {
+			header.ParentBeaconRoot = new(common.Hash)
+		}
 	}
 	return header
 }
@@ -586,5 +618,9 @@ func (cm *chainMaker) GetTd(hash common.Hash, number uint64) *big.Int {
 }
 
 func (cm *chainMaker) GetHighestVerifiedHeader() *types.Header {
+	panic("not supported")
+}
+
+func (cm *chainMaker) ChasingHead() *types.Header {
 	panic("not supported")
 }

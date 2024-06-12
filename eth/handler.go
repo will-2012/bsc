@@ -33,7 +33,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/monitor"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/txpool"
-	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/fetcher"
@@ -86,7 +85,7 @@ type txPool interface {
 
 	// Pending should return pending transactions.
 	// The slice should be modifiable by the caller.
-	Pending(enforceTips bool) map[common.Address][]*txpool.LazyTransaction
+	Pending(filter txpool.PendingFilter) map[common.Address][]*txpool.LazyTransaction
 
 	// SubscribeTransactions subscribes to new transaction events. The subscriber
 	// can decide whether to receive notifications only for newly seen transactions
@@ -219,7 +218,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 			}
 			h.snapSync.Store(true)
 			log.Warn("Switch sync mode from full sync to snap sync", "reason", "snap sync incomplete")
-		} else if !h.chain.HasState(fullBlock.Root) {
+		} else if !h.chain.NoTries() && !h.chain.HasState(fullBlock.Root) {
 			h.snapSync.Store(true)
 			log.Warn("Switch sync mode from full sync to snap sync", "reason", "head state missing")
 		}
@@ -319,7 +318,30 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		}
 		return h.chain.InsertChain(blocks)
 	}
-	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, h.BroadcastBlock,
+
+	broadcastBlockWithCheck := func(block *types.Block, propagate bool) {
+		if propagate {
+			checkErrs := make(chan error, 2)
+
+			go func() {
+				checkErrs <- core.ValidateListsInBody(block)
+			}()
+			go func() {
+				checkErrs <- core.IsDataAvailable(h.chain, block)
+			}()
+
+			for i := 0; i < cap(checkErrs); i++ {
+				err := <-checkErrs
+				if err != nil {
+					log.Error("Propagating invalid block", "number", block.Number(), "hash", block.Hash(), "err", err)
+					return
+				}
+			}
+		}
+		h.BroadcastBlock(block, propagate)
+	}
+
+	h.blockFetcher = fetcher.NewBlockFetcher(false, nil, h.chain.GetBlockByHash, validator, broadcastBlockWithCheck,
 		heighter, finalizeHeighter, nil, inserter, h.removePeer)
 
 	fetchTx := func(peer string, hashes []common.Hash) error {
@@ -332,7 +354,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	addTxs := func(peer string, txs []*types.Transaction) []error {
 		errors := h.txpool.Add(txs, false, false)
 		for _, err := range errors {
-			if err == legacypool.ErrInBlackList {
+			if err == txpool.ErrInBlackList {
 				accountBlacklistPeerCounter.Inc(1)
 				p := h.peers.peer(peer)
 				if p != nil {
@@ -795,6 +817,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		} else {
 			transfer = peers[:int(math.Sqrt(float64(len(peers))))]
 		}
+
 		for _, peer := range transfer {
 			peer.AsyncSendNewBlock(block, td)
 		}

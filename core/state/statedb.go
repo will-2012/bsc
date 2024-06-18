@@ -81,13 +81,14 @@ func (m *mutation) isDelete() bool {
 // must be created with new root and updated database for accessing post-
 // commit states.
 type StateDB struct {
-	db             Database
-	prefetcherLock sync.Mutex
-	prefetcher     *triePrefetcher
-	trie           Trie
-	noTrie         bool
-	reader         Reader
-
+	db               Database
+	prefetcherLock   sync.Mutex
+	prefetcher       *triePrefetcher
+	trie             Trie
+	noTrie           bool
+	reader           Reader
+	hasher           crypto.KeccakState
+	cacheAmongBlocks *CacheAmongBlocks
 	// originalRoot is the pre-state root, before any changes were made.
 	// It will be updated when the Commit is called.
 	originalRoot common.Hash
@@ -174,6 +175,17 @@ type StateDB struct {
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
 
 	EnablePerf bool
+}
+
+// NewWithCacheAmongBlocks creates a new state with a cache which store the data among blocks
+func NewWithCacheAmongBlocks(root common.Hash, db Database, cache *CacheAmongBlocks) (*StateDB, error) {
+	statedb, err := New(root, db)
+	if err != nil {
+		return nil, err
+	}
+
+	statedb.cacheAmongBlocks = cache
+	return statedb, nil
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -705,17 +717,52 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	}
 	s.AccountLoaded++
 
-	start := time.Now()
-	acct, err := s.reader.Account(addr)
-	if s.EnablePerf {
-		perfOutAccountTime.UpdateSince(start)
+	// If no live objects are available, attempt to use snapshots
+	var err error
+	var exist bool
+	var acct *types.StateAccount
+	var data *types.SlimAccount
+	accounthash := crypto.HashData(s.hasher, addr.Bytes())
+	// Try to get from cache among blocks if the cache root is the pre-state root
+	if s.cacheAmongBlocks != nil && s.cacheAmongBlocks.GetRoot() == s.originalRoot {
+		data, exist = s.cacheAmongBlocks.GetAccount(accounthash)
+		if exist {
+			SnapshotBlockCacheAccountHitMeter.Mark(1)
+			if data == nil {
+				return nil
+			}
+		} else {
+			SnapshotBlockCacheAccountMissMeter.Mark(1)
+		}
+
+		if err == nil || exist {
+			acct = &types.StateAccount{
+				Nonce:    data.Nonce,
+				Balance:  data.Balance,
+				CodeHash: data.CodeHash,
+				Root:     common.BytesToHash(data.Root),
+			}
+			if len(acct.CodeHash) == 0 {
+				acct.CodeHash = types.EmptyCodeHash.Bytes()
+			}
+			if acct.Root == (common.Hash{}) {
+				acct.Root = types.EmptyRootHash
+			}
+		}
 	}
-	if err != nil {
-		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
-		return nil
-	}
-	if metrics.EnabledExpensive() {
-		s.AccountReads += time.Since(start)
+	if !exist {
+		start := time.Now()
+		acct, err = s.reader.Account(addr)
+		if s.EnablePerf {
+			perfOutAccountTime.UpdateSince(start)
+		}
+		if err != nil {
+			s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
+			return nil
+		}
+		if metrics.EnabledExpensive() {
+			s.AccountReads += time.Since(start)
+		}
 	}
 
 	// Short circuit if the account is not found
@@ -817,9 +864,12 @@ func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 		transientStorage: s.transientStorage.Copy(),
 		journal:          s.journal.copy(),
 	}
+
 	if s.witness != nil {
 		state.witness = s.witness.Copy()
 	}
+	state.cacheAmongBlocks = s.cacheAmongBlocks
+
 	// Do we need to copy the access list and transient storage?
 	// In practice: No. At the start of a transaction, these two lists are empty.
 	// In practice, we only ever copy state _between_ transactions/blocks, never

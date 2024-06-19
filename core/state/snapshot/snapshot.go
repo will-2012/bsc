@@ -384,6 +384,9 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	}
 	snap := parent.(snapshot).Update(blockRoot, destructs, accounts, storage, verified)
 
+	// TODO: add to multi version cache
+	snap.multiVersionCache.AddDiffLayer(snap)
+
 	// Save the new snapshot for later
 	t.lock.Lock()
 	defer t.lock.Unlock()
@@ -436,6 +439,12 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		base := diffToDisk(diff.flatten().(*diffLayer))
 		diff.lock.RUnlock()
 
+		for _, ly := range t.layers {
+			if diff, ok := ly.(*diffLayer); ok {
+				diff.multiVersionCache.RemoveDiffLayer(diff)
+			}
+		}
+
 		// Replace the entire snapshot tree with the flat base
 		t.layers = map[common.Hash]snapshot{base.root: base}
 		return nil
@@ -452,6 +461,13 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 	}
 	var remove func(root common.Hash)
 	remove = func(root common.Hash) {
+		if df, exist := t.layers[root]; exist {
+			if diff, ok := df.(*diffLayer); ok {
+				// Clean up the hash cache of the child difflayer corresponding to the stale parent, include the re-org case.
+				diff.multiVersionCache.RemoveDiffLayer(diff)
+				log.Debug("Cleanup difflayer multiversion cache due to reorg", "diff_root", diff.root.String(), "diff_layer_version", diff.diffLayerID)
+			}
+		}
 		delete(t.layers, root)
 		for _, child := range children[root] {
 			remove(child)
@@ -476,6 +492,8 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		}
 		rebloom(persisted.root)
 	}
+
+	// todo:
 	log.Debug("Snapshot capped", "root", root)
 	return nil
 }

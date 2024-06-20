@@ -99,11 +99,13 @@ func init() {
 // The goal of a diff layer is to act as a journal, tracking recent modifications
 // made to the state, that have not yet graduated into a semi-immutable state.
 type diffLayer struct {
-	origin            *diskLayer                 // Base disk layer to directly use on bloom misses
-	parent            snapshot                   // Parent snapshot modified by this one, never nil
-	memory            uint64                     // Approximate guess as to how much memory we use
+	origin *diskLayer // Base disk layer to directly use on bloom misses
+	parent snapshot   // Parent snapshot modified by this one, never nil
+	memory uint64     // Approximate guess as to how much memory we use
+
 	diffLayerID       uint64                     //
 	multiVersionCache *MultiVersionSnapshotCache //
+	// diffLayerParent   map[common.Hash]map[common.Hash]struct{} //
 
 	root  common.Hash // Root hash to which this snapshot diff belongs to
 	stale atomic.Bool // Signals that the layer became stale (state progressed)
@@ -164,6 +166,7 @@ func newDiffLayer(parent snapshot, root common.Hash, destructs map[common.Hash]s
 		dl.rebloom(parent)
 		dl.diffLayerID = 1
 		dl.multiVersionCache = NewMultiVersionSnapshotCache()
+		// dl.diffLayerParent = make(map[common.Hash]map[common.Hash]struct{})
 	case *diffLayer:
 		dl.rebloom(parent.origin)
 		dl.diffLayerID = parent.diffLayerID + 1

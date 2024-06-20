@@ -6,20 +6,32 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 type destructCacheItem struct {
 	version uint64
+	root    common.Hash
 }
 
 type accountCacheItem struct {
 	version uint64
+	root    common.Hash
 	data    []byte
 }
 
 type storageCacheItem struct {
 	version uint64
+	root    common.Hash
 	data    []byte
+}
+
+func cloneParentMap(parentMap map[common.Hash]struct{}) map[common.Hash]struct{} {
+	cloneMap := make(map[common.Hash]struct{})
+	for k, _ := range parentMap {
+		cloneMap[k] = struct{}{}
+	}
+	return cloneMap
 }
 
 type MultiVersionSnapshotCache struct {
@@ -28,6 +40,7 @@ type MultiVersionSnapshotCache struct {
 	accountDataCache map[common.Hash][]*accountCacheItem
 	storageDataCache map[common.Hash]map[common.Hash][]*storageCacheItem
 	minVersion       uint64 // bottom version
+	diffLayerParent  map[common.Hash]map[common.Hash]struct{}
 }
 
 func NewMultiVersionSnapshotCache() *MultiVersionSnapshotCache {
@@ -36,7 +49,32 @@ func NewMultiVersionSnapshotCache() *MultiVersionSnapshotCache {
 		accountDataCache: make(map[common.Hash][]*accountCacheItem),
 		storageDataCache: make(map[common.Hash]map[common.Hash][]*storageCacheItem),
 		minVersion:       math.MaxUint64,
+		diffLayerParent:  make(map[common.Hash]map[common.Hash]struct{}),
 	}
+}
+
+func (c *MultiVersionSnapshotCache) checkParent(childRoot common.Hash, parentRoot common.Hash) bool {
+	if c == nil {
+		return false
+	}
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+	if _, exist := c.diffLayerParent[childRoot]; !exist {
+		return false
+	}
+	if _, exist := c.diffLayerParent[childRoot][parentRoot]; !exist {
+		return false
+	}
+	return true
+}
+
+func (c *MultiVersionSnapshotCache) ResetParentMap(newDiffLayerParent map[common.Hash]map[common.Hash]struct{}) {
+	if c == nil {
+		return
+	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.diffLayerParent = newDiffLayerParent
 }
 
 func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
@@ -48,18 +86,18 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 
 	for hash := range ly.destructSet {
 		if multiVersionItems, exist := c.destructCache[hash]; exist {
-			multiVersionItems = append(multiVersionItems, &destructCacheItem{version: ly.diffLayerID})
+			multiVersionItems = append(multiVersionItems, &destructCacheItem{version: ly.diffLayerID, root: ly.root})
 			c.destructCache[hash] = multiVersionItems
 		} else {
-			c.destructCache[hash] = []*destructCacheItem{&destructCacheItem{version: ly.diffLayerID}}
+			c.destructCache[hash] = []*destructCacheItem{&destructCacheItem{version: ly.diffLayerID, root: ly.root}}
 		}
 	}
 	for hash, aData := range ly.accountData {
 		if multiVersionItems, exist := c.accountDataCache[hash]; exist {
-			multiVersionItems = append(multiVersionItems, &accountCacheItem{version: ly.diffLayerID, data: aData})
+			multiVersionItems = append(multiVersionItems, &accountCacheItem{version: ly.diffLayerID, root: ly.root, data: aData})
 			c.accountDataCache[hash] = multiVersionItems
 		} else {
-			c.accountDataCache[hash] = []*accountCacheItem{&accountCacheItem{version: ly.diffLayerID, data: aData}}
+			c.accountDataCache[hash] = []*accountCacheItem{&accountCacheItem{version: ly.diffLayerID, root: ly.root, data: aData}}
 		}
 	}
 	for accountHash, slots := range ly.storageData {
@@ -68,13 +106,27 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 		}
 		for storageHash, sData := range slots {
 			if multiVersionItems, exist := c.storageDataCache[accountHash][storageHash]; exist {
-				multiVersionItems = append(multiVersionItems, &storageCacheItem{version: ly.diffLayerID, data: sData})
+				multiVersionItems = append(multiVersionItems, &storageCacheItem{version: ly.diffLayerID, root: ly.root, data: sData})
 				c.storageDataCache[accountHash][storageHash] = multiVersionItems
 			} else {
-				c.storageDataCache[accountHash][storageHash] = []*storageCacheItem{&storageCacheItem{version: ly.diffLayerID, data: sData}}
+				c.storageDataCache[accountHash][storageHash] = []*storageCacheItem{&storageCacheItem{version: ly.diffLayerID, root: ly.root, data: sData}}
 			}
 		}
 	}
+
+	if parentDiffLayer, ok := ly.parent.(*diffLayer); ok {
+		if parentLayerParent, exist := c.diffLayerParent[parentDiffLayer.root]; exist {
+			clonedParentLayerParent := cloneParentMap(parentLayerParent)
+			clonedParentLayerParent[ly.root] = struct{}{}
+			c.diffLayerParent[ly.root] = clonedParentLayerParent
+		} else {
+			log.Warn("Impossible branch, maybe there is a bug.")
+		}
+	} else {
+		c.diffLayerParent[ly.root] = make(map[common.Hash]struct{})
+		c.diffLayerParent[ly.root][ly.root] = struct{}{}
+	}
+
 }
 
 func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
@@ -130,6 +182,11 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 				delete(c.storageDataCache, aHash)
 			}
 		}
+
+		delete(c.diffLayerParent, ly.root)
+		for _, v := range c.diffLayerParent {
+			delete(v, ly.root)
+		}
 	}()
 }
 
@@ -149,9 +206,9 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 	{
 		if multiVersionItems, exist := c.accountDataCache[ahash]; exist && len(multiVersionItems) != 0 {
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
-				// TODO: check parent.
-				if multiVersionItems[i].version <= version && multiVersionItems[i].version > c.minVersion {
-					//hit = true
+				if multiVersionItems[i].version <= version &&
+					multiVersionItems[i].version > c.minVersion &&
+					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryAccountItem = multiVersionItems[i]
 				}
 			}
@@ -161,9 +218,9 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 	{
 		if multiVersionItems, exist := c.destructCache[ahash]; exist && len(multiVersionItems) != 0 {
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
-				// TODO: check parent.
-				if multiVersionItems[i].version <= version && multiVersionItems[i].version > c.minVersion {
-					//hit = true
+				if multiVersionItems[i].version <= version &&
+					multiVersionItems[i].version > c.minVersion &&
+					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
 				}
 			}
@@ -209,9 +266,9 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 		if _, exist := c.storageDataCache[ahash]; exist {
 			if multiVersionItems, exist2 := c.storageDataCache[ahash][shash]; exist2 && len(multiVersionItems) != 0 {
 				for i := len(multiVersionItems) - 1; i >= 0; i-- {
-					// TODO: check parent.
-					if multiVersionItems[i].version <= version && multiVersionItems[i].version > c.minVersion {
-						//hit = true
+					if multiVersionItems[i].version <= version &&
+						multiVersionItems[i].version > c.minVersion &&
+						c.checkParent(rootHash, multiVersionItems[i].root) {
 						queryStorageItem = multiVersionItems[i]
 					}
 				}
@@ -222,9 +279,9 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 	{
 		if multiVersionItems, exist := c.destructCache[ahash]; exist && len(multiVersionItems) != 0 {
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
-				// TODO: check parent.
-				if multiVersionItems[i].version <= version && multiVersionItems[i].version > c.minVersion {
-					//hit = true
+				if multiVersionItems[i].version <= version &&
+					multiVersionItems[i].version > c.minVersion &&
+					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
 				}
 			}

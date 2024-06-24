@@ -164,14 +164,13 @@ func newDiffLayer(parent snapshot, root common.Hash, destructs map[common.Hash]s
 
 	switch parent := parent.(type) {
 	case *diskLayer:
-		dl.rebloom(parent)
 		dl.diffLayerID = 1
 		dl.multiVersionCache = NewMultiVersionSnapshotCache()
-		// dl.diffLayerParent = make(map[common.Hash]map[common.Hash]struct{})
+		dl.rebloom(parent)
 	case *diffLayer:
-		dl.rebloom(parent.origin)
 		dl.diffLayerID = parent.diffLayerID + 1
 		dl.multiVersionCache = parent.multiVersionCache
+		dl.rebloom(parent.origin)
 	default:
 		panic("unknown parent type")
 	}

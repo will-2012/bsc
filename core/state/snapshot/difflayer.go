@@ -347,11 +347,11 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 				data, err = dl.origin.AccountRLP(hash)
 			}
 			if err != nil {
-				log.Info("Account has bug due to query disklayer", "error", err)
+				log.Warn("Account has bug due to query disklayer", "error", err)
 			}
 			return data, err
 		}
-		log.Info("Account has bug due to query multi version cache", "error", err)
+		log.Warn("Account has bug due to query multi version cache", "error", err)
 	}
 
 	// Check the bloom filter first whether there's even a point in reaching into
@@ -435,11 +435,11 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 				data, err = dl.origin.Storage(accountHash, storageHash)
 			}
 			if err != nil {
-				log.Info("Storage has bug due to query disklayer", "error", err)
+				log.Warn("Storage has bug due to query disklayer", "error", err)
 			}
 			return data, err
 		}
-		log.Info("Storage has bug due to query multi version cache", "error", err)
+		log.Warn("Storage has bug due to query multi version cache", "error", err)
 	}
 
 	hit := dl.diffed.ContainsHash(storageBloomHash(accountHash, storageHash))

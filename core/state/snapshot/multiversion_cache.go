@@ -75,6 +75,7 @@ func (c *MultiVersionSnapshotCache) ResetParentMap(newDiffLayerParent map[common
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.diffLayerParent = newDiffLayerParent
+	log.Info("Reset parent map")
 }
 
 func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
@@ -83,6 +84,7 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	log.Info("Add difflayer to snapshot multiversion cache", "root", ly.root, "version_id", ly.diffLayerID)
 
 	for hash := range ly.destructSet {
 		if multiVersionItems, exist := c.destructCache[hash]; exist {
@@ -138,6 +140,7 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 		c.minVersion = ly.diffLayerID
 	}
 	c.lock.Unlock()
+	log.Info("Remove difflayer from snapshot multiversion cache", "root", ly.root, "version_id", ly.diffLayerID)
 
 	go func() {
 		c.lock.Lock()
@@ -205,6 +208,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 
 	{
 		if multiVersionItems, exist := c.accountDataCache[ahash]; exist && len(multiVersionItems) != 0 {
+			log.Info("Account hit account cache")
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
 					multiVersionItems[i].version > c.minVersion &&
@@ -217,6 +221,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 
 	{
 		if multiVersionItems, exist := c.destructCache[ahash]; exist && len(multiVersionItems) != 0 {
+			log.Info("Account hit destruct cache")
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
 					multiVersionItems[i].version > c.minVersion &&
@@ -265,6 +270,7 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 
 		if _, exist := c.storageDataCache[ahash]; exist {
 			if multiVersionItems, exist2 := c.storageDataCache[ahash][shash]; exist2 && len(multiVersionItems) != 0 {
+				log.Info("Storage hit storage cache")
 				for i := len(multiVersionItems) - 1; i >= 0; i-- {
 					if multiVersionItems[i].version <= version &&
 						multiVersionItems[i].version > c.minVersion &&
@@ -278,6 +284,7 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 
 	{
 		if multiVersionItems, exist := c.destructCache[ahash]; exist && len(multiVersionItems) != 0 {
+			log.Info("Storage hit destruct cache")
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
 					multiVersionItems[i].version > c.minVersion &&

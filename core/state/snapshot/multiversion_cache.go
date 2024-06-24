@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,16 +14,52 @@ type destructCacheItem struct {
 	root    common.Hash
 }
 
+type MultiVersionDestructItemSlice []*destructCacheItem
+
+func (a MultiVersionDestructItemSlice) Len() int {
+	return len(a)
+}
+func (a MultiVersionDestructItemSlice) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+func (a MultiVersionDestructItemSlice) Less(i, j int) bool {
+	return a[j].version > a[i].version
+}
+
 type accountCacheItem struct {
 	version uint64
 	root    common.Hash
 	data    []byte
 }
 
+type MultiVersionAccountItemSlice []*accountCacheItem
+
+func (a MultiVersionAccountItemSlice) Len() int {
+	return len(a)
+}
+func (a MultiVersionAccountItemSlice) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+func (a MultiVersionAccountItemSlice) Less(i, j int) bool {
+	return a[j].version > a[i].version
+}
+
 type storageCacheItem struct {
 	version uint64
 	root    common.Hash
 	data    []byte
+}
+
+type MultiVersionStorageItemSlice []*storageCacheItem
+
+func (a MultiVersionStorageItemSlice) Len() int {
+	return len(a)
+}
+func (a MultiVersionStorageItemSlice) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+func (a MultiVersionStorageItemSlice) Less(i, j int) bool {
+	return a[j].version > a[i].version
 }
 
 func cloneParentMap(parentMap map[common.Hash]struct{}) map[common.Hash]struct{} {
@@ -100,6 +137,13 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 			"cache_version", ly.diffLayerID,
 			"cache_root", ly.root)
 	}
+	// sorted by version
+	for hash := range c.destructCache {
+		dItems := c.destructCache[hash]
+		sort.Sort(MultiVersionDestructItemSlice(dItems))
+		c.destructCache[hash] = dItems
+	}
+
 	for hash, aData := range ly.accountData {
 		if multiVersionItems, exist := c.accountDataCache[hash]; exist {
 			multiVersionItems = append(multiVersionItems, &accountCacheItem{version: ly.diffLayerID, root: ly.root, data: aData})
@@ -114,6 +158,14 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 			"cache_root", ly.root,
 			"cache_data_len", len(aData))
 	}
+
+	// sorted by version
+	for hash := range c.accountDataCache {
+		aItems := c.accountDataCache[hash]
+		sort.Sort(MultiVersionAccountItemSlice(aItems))
+		c.accountDataCache[hash] = aItems
+	}
+
 	for accountHash, slots := range ly.storageData {
 		if _, exist := c.storageDataCache[accountHash]; !exist {
 			c.storageDataCache[accountHash] = make(map[common.Hash][]*storageCacheItem)
@@ -132,6 +184,14 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 				"cache_version", ly.diffLayerID,
 				"cache_root", ly.root,
 				"cache_data_len", len(sData))
+		}
+	}
+	// sorted by version
+	for ahash := range c.storageDataCache {
+		for shash := range c.storageDataCache[ahash] {
+			sItems := c.storageDataCache[ahash][shash]
+			sort.Sort(MultiVersionStorageItemSlice(sItems))
+			c.storageDataCache[ahash][shash] = sItems
 		}
 	}
 
@@ -167,7 +227,8 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 
 		for aHash, multiVersionDestructList := range c.destructCache {
 			for i := 0; i < len(multiVersionDestructList); i++ {
-				if multiVersionDestructList[i].version <= c.minVersion {
+				if multiVersionDestructList[i].version == ly.diffLayerID &&
+					multiVersionDestructList[i].root == ly.root {
 					log.Info("Remove destruct from cache",
 						"cache_account_hash", aHash,
 						"cache_version", multiVersionDestructList[i].version,
@@ -185,7 +246,8 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 
 		for aHash, multiVersionAccoutList := range c.accountDataCache {
 			for i := 0; i < len(multiVersionAccoutList); i++ {
-				if multiVersionAccoutList[i].version <= c.minVersion {
+				if multiVersionAccoutList[i].version == ly.diffLayerID &&
+					multiVersionAccoutList[i].root == ly.root {
 					log.Info("Remove account from cache",
 						"cache_account_hash", aHash,
 						"cache_version", multiVersionAccoutList[i].version,
@@ -203,7 +265,8 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 		for aHash := range c.storageDataCache {
 			for sHash, multiVersionStorageList := range c.storageDataCache[aHash] {
 				for i := 0; i < len(multiVersionStorageList); i++ {
-					if multiVersionStorageList[i].version <= c.minVersion {
+					if multiVersionStorageList[i].version == ly.diffLayerID &&
+						multiVersionStorageList[i].root == ly.root {
 						log.Info("Remove storage from cache",
 							"cache_account_hash", aHash,
 							"cache_storage_hash", sHash,
@@ -254,7 +317,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 				"multi_version_cache_len", len(multiVersionItems))
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
-					multiVersionItems[i].version > c.minVersion &&
+					multiVersionItems[i].version >= c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryAccountItem = multiVersionItems[i]
 					log.Info("Account hit account cache",
@@ -284,7 +347,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 				"multi_version_cache_len", len(multiVersionItems))
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
-					multiVersionItems[i].version > c.minVersion &&
+					multiVersionItems[i].version >= c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
 					log.Info("Account hit destruct cache",
@@ -349,7 +412,7 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 					"multi_version_cache_len", len(multiVersionItems))
 				for i := len(multiVersionItems) - 1; i >= 0; i-- {
 					if multiVersionItems[i].version <= version &&
-						multiVersionItems[i].version > c.minVersion &&
+						multiVersionItems[i].version >= c.minVersion &&
 						c.checkParent(rootHash, multiVersionItems[i].root) {
 						queryStorageItem = multiVersionItems[i]
 						log.Info("Account hit storage cache",
@@ -383,7 +446,7 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 				"multi_version_cache_len", len(multiVersionItems))
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
-					multiVersionItems[i].version > c.minVersion &&
+					multiVersionItems[i].version >= c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
 					log.Info("Account hit destruct cache",

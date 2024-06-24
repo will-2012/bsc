@@ -477,7 +477,7 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		delete(children, root)
 	}
 	for root, snap := range t.layers {
-		if snap.Stale() {
+		if snap.Stale() { // ??
 			remove(root)
 		}
 	}

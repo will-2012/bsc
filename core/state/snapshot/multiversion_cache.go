@@ -214,6 +214,9 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 	if c == nil || ly == nil {
 		return
 	}
+	if old := ly.hasCleanupCache.Swap(true); old {
+		return
+	}
 	c.lock.Lock()
 	if ly.diffLayerID > c.minVersion {
 		c.minVersion = ly.diffLayerID

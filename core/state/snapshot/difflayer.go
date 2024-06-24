@@ -107,6 +107,7 @@ type diffLayer struct {
 
 	diffLayerID       uint64                     //
 	multiVersionCache *MultiVersionSnapshotCache //
+	hasCleanupCache   atomic.Bool
 	// diffLayerParent   map[common.Hash]map[common.Hash]struct{} //
 
 	root  common.Hash // Root hash to which this snapshot diff belongs to
@@ -592,6 +593,7 @@ func (dl *diffLayer) flatten() snapshot {
 	if parent.stale.Swap(true) {
 		panic("parent diff layer is stale") // we've flattened into the same parent from two children, boo
 	}
+	// ??
 	log.Info("Cleanup cache due to flatten", "diff_root", parent.root, "diff_version", parent.diffLayerID)
 	parent.multiVersionCache.RemoveDiffLayer(parent)
 	// Overwrite all the updated accounts blindly, merge the sorted list

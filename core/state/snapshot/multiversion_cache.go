@@ -157,7 +157,7 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 	//	defer c.lock.Unlock()
 
 	for aHash, multiVersionDestructList := range c.destructCache {
-		for i := 0; i < len(c.destructCache); i++ {
+		for i := 0; i < len(multiVersionDestructList); i++ {
 			if multiVersionDestructList[i].version <= c.minVersion {
 				multiVersionDestructList = append(multiVersionDestructList[:i], multiVersionDestructList[i+1:]...)
 				i--
@@ -170,7 +170,7 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 	}
 
 	for aHash, multiVersionAccoutList := range c.accountDataCache {
-		for i := 0; i < len(c.accountDataCache); i++ {
+		for i := 0; i < len(multiVersionAccoutList); i++ {
 			if multiVersionAccoutList[i].version <= c.minVersion {
 				multiVersionAccoutList = append(multiVersionAccoutList[:i], multiVersionAccoutList[i+1:]...)
 				i--

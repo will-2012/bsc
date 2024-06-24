@@ -618,6 +618,7 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		panic("parent disk layer is stale") // we've committed into the same base from two children, boo
 	}
 	base.stale = true
+	log.Info("Make old disklayer stale", "disklayer_root", base.root)
 	base.lock.Unlock()
 
 	// Destroy all the destructed accounts from the database

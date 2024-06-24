@@ -17,6 +17,7 @@
 package snapshot
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -354,6 +355,23 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 				diffMultiVersionCacheBugMeter.Mark(1)
 			}
 			dl.lock.RUnlock()
+
+			{
+				// todo: double check
+				expectedData, expectedErr := dl.accountRLP(hash, 0)
+				if bytes.Compare(data, expectedData) != 0 {
+					log.Warn("Has bug",
+						"need_try_disk", needTryDisk,
+						"query_version", dl.diffLayerID,
+						"query_root", dl.root,
+						"account_hash", hash,
+						"actual_data_len", len(data),
+						"expected_data_len", len(expectedData),
+						"actual_error", err,
+						"expected_error", expectedErr)
+				}
+
+			}
 			return data, err
 		}
 		log.Warn("Account has bug due to query multi version cache", "error", err)
@@ -449,6 +467,24 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 				diffMultiVersionCacheBugMeter.Mark(1)
 			}
 			dl.lock.RUnlock()
+
+			{
+				// todo: double check
+				expectedData, expectedErr := dl.storage(accountHash, storageHash, 0)
+				if bytes.Compare(data, expectedData) != 0 {
+					log.Warn("Has bug",
+						"need_try_disk", needTryDisk,
+						"query_version", dl.diffLayerID,
+						"query_root", dl.root,
+						"account_hash", accountHash,
+						"storage_hash", storageHash,
+						"actual_data_len", len(data),
+						"expected_data_len", len(expectedData),
+						"actual_error", err,
+						"expected_error", expectedErr)
+				}
+
+			}
 			return data, err
 		}
 		log.Warn("Storage has bug due to query multi version cache", "error", err)

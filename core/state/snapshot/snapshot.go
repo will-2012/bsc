@@ -384,7 +384,6 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	}
 	snap := parent.(snapshot).Update(blockRoot, destructs, accounts, storage, verified)
 
-	// TODO: add to multi version cache
 	snap.multiVersionCache.AddDiffLayer(snap)
 
 	// Save the new snapshot for later

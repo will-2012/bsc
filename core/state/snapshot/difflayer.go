@@ -344,13 +344,19 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 		if err == nil {
 			if needTryDisk {
 				data, err = dl.origin.AccountRLP(hash)
+				diffMultiVersionCacheMissMeter.Mark(1)
+			} else {
+				diffMultiVersionCacheHitMeter.Mark(1)
+				diffMultiVersionCacheReadMeter.Mark(int64(len(data)))
 			}
 			if err != nil {
 				log.Warn("Account has bug due to query disklayer", "error", err)
+				diffMultiVersionCacheBugMeter.Mark(1)
 			}
 			return data, err
 		}
 		log.Warn("Account has bug due to query multi version cache", "error", err)
+		diffMultiVersionCacheBugMeter.Mark(1)
 	}
 
 	// Check the bloom filter first whether there's even a point in reaching into
@@ -432,13 +438,19 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 		if err == nil {
 			if needTryDisk {
 				data, err = dl.origin.Storage(accountHash, storageHash)
+				diffMultiVersionCacheMissMeter.Mark(1)
+			} else {
+				diffMultiVersionCacheHitMeter.Mark(1)
+				diffMultiVersionCacheReadMeter.Mark(int64(len(data)))
 			}
 			if err != nil {
 				log.Warn("Storage has bug due to query disklayer", "error", err)
+				diffMultiVersionCacheBugMeter.Mark(1)
 			}
 			return data, err
 		}
 		log.Warn("Storage has bug due to query multi version cache", "error", err)
+		diffMultiVersionCacheBugMeter.Mark(1)
 	}
 
 	hit := dl.diffed.ContainsHash(storageBloomHash(accountHash, storageHash))

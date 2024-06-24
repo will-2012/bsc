@@ -555,12 +555,12 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 		// write lock on grandparent.
 		flattened := parent.flatten().(*diffLayer)
 
-		if oldlayer, exist := t.layers[flattened.root]; exist {
-			if oldDifflayer, ok := oldlayer.(*diffLayer); ok {
-				oldDifflayer.multiVersionCache.RemoveDiffLayer(oldDifflayer)
-			}
-		}
-		flattened.multiVersionCache.AddDiffLayer(flattened)
+		//if oldlayer, exist := t.layers[flattened.root]; exist {
+		//	if oldDifflayer, ok := oldlayer.(*diffLayer); ok {
+		//		oldDifflayer.multiVersionCache.RemoveDiffLayer(oldDifflayer)
+		//	}
+		//}
+		//flattened.multiVersionCache.AddDiffLayer(flattened)
 		t.layers[flattened.root] = flattened
 
 		// Invoke the hook if it's registered. Ugly hack.

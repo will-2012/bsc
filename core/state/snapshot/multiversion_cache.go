@@ -152,59 +152,59 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 	c.lock.Unlock()
 	log.Info("Remove difflayer from snapshot multiversion cache", "root", ly.root, "version_id", ly.diffLayerID, "current_cache_item_number", c.cacheItemNumber)
 
-	//go func() {
-	//	c.lock.Lock()
-	//	defer c.lock.Unlock()
+	go func() {
+		c.lock.Lock()
+		defer c.lock.Unlock()
 
-	for aHash, multiVersionDestructList := range c.destructCache {
-		for i := 0; i < len(multiVersionDestructList); i++ {
-			if multiVersionDestructList[i].version <= c.minVersion {
-				multiVersionDestructList = append(multiVersionDestructList[:i], multiVersionDestructList[i+1:]...)
-				i--
-				c.cacheItemNumber--
-			}
-		}
-		if len(multiVersionDestructList) == 0 {
-			delete(c.destructCache, aHash)
-		}
-	}
-
-	for aHash, multiVersionAccoutList := range c.accountDataCache {
-		for i := 0; i < len(multiVersionAccoutList); i++ {
-			if multiVersionAccoutList[i].version <= c.minVersion {
-				multiVersionAccoutList = append(multiVersionAccoutList[:i], multiVersionAccoutList[i+1:]...)
-				i--
-				c.cacheItemNumber--
-			}
-		}
-		if len(multiVersionAccoutList) == 0 {
-			delete(c.accountDataCache, aHash)
-		}
-	}
-	for aHash := range c.storageDataCache {
-		for sHash, multiVersionStorageList := range c.storageDataCache[aHash] {
-			for i := 0; i < len(multiVersionStorageList); i++ {
-				if multiVersionStorageList[i].version <= c.minVersion {
-					multiVersionStorageList = append(multiVersionStorageList[:i], multiVersionStorageList[i+1:]...)
+		for aHash, multiVersionDestructList := range c.destructCache {
+			for i := 0; i < len(multiVersionDestructList); i++ {
+				if multiVersionDestructList[i].version <= c.minVersion {
+					multiVersionDestructList = append(multiVersionDestructList[:i], multiVersionDestructList[i+1:]...)
 					i--
 					c.cacheItemNumber--
 				}
 			}
-			if len(multiVersionStorageList) == 0 {
-				delete(c.storageDataCache[aHash], sHash)
+			if len(multiVersionDestructList) == 0 {
+				delete(c.destructCache, aHash)
 			}
 		}
-		if len(c.storageDataCache[aHash]) == 0 {
-			delete(c.storageDataCache, aHash)
-		}
-	}
 
-	delete(c.diffLayerParent, ly.root)
-	for _, v := range c.diffLayerParent {
-		delete(v, ly.root)
-	}
-	diffMultiVersionCacheLengthGauge.Update(c.cacheItemNumber)
-	//}()
+		for aHash, multiVersionAccoutList := range c.accountDataCache {
+			for i := 0; i < len(multiVersionAccoutList); i++ {
+				if multiVersionAccoutList[i].version <= c.minVersion {
+					multiVersionAccoutList = append(multiVersionAccoutList[:i], multiVersionAccoutList[i+1:]...)
+					i--
+					c.cacheItemNumber--
+				}
+			}
+			if len(multiVersionAccoutList) == 0 {
+				delete(c.accountDataCache, aHash)
+			}
+		}
+		for aHash := range c.storageDataCache {
+			for sHash, multiVersionStorageList := range c.storageDataCache[aHash] {
+				for i := 0; i < len(multiVersionStorageList); i++ {
+					if multiVersionStorageList[i].version <= c.minVersion {
+						multiVersionStorageList = append(multiVersionStorageList[:i], multiVersionStorageList[i+1:]...)
+						i--
+						c.cacheItemNumber--
+					}
+				}
+				if len(multiVersionStorageList) == 0 {
+					delete(c.storageDataCache[aHash], sHash)
+				}
+			}
+			if len(c.storageDataCache[aHash]) == 0 {
+				delete(c.storageDataCache, aHash)
+			}
+		}
+
+		delete(c.diffLayerParent, ly.root)
+		for _, v := range c.diffLayerParent {
+			delete(v, ly.root)
+		}
+		diffMultiVersionCacheLengthGauge.Update(c.cacheItemNumber)
+	}()
 }
 
 // QueryAccount return tuple(data-slice, need-try-disklayer, error)

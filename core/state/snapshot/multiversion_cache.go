@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -48,7 +47,7 @@ func NewMultiVersionSnapshotCache() *MultiVersionSnapshotCache {
 		destructCache:    make(map[common.Hash][]*destructCacheItem),
 		accountDataCache: make(map[common.Hash][]*accountCacheItem),
 		storageDataCache: make(map[common.Hash]map[common.Hash][]*storageCacheItem),
-		minVersion:       math.MaxUint64,
+		minVersion:       0,
 		diffLayerParent:  make(map[common.Hash]map[common.Hash]struct{}),
 	}
 }
@@ -142,7 +141,7 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 		return
 	}
 	c.lock.Lock()
-	if c.minVersion > ly.diffLayerID {
+	if c.minVersion < ly.diffLayerID {
 		c.minVersion = ly.diffLayerID
 	}
 	c.lock.Unlock()

@@ -730,7 +730,7 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		res.genAbort = make(chan chan *generatorStats)
 		go res.generate(stats)
 	}
-	bottom.multiVersionCache.RemoveDiffLayer(bottom)
+	// bottom.multiVersionCache.RemoveDiffLayer(bottom)
 	return res
 }
 

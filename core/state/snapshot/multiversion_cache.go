@@ -96,7 +96,9 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 		}
 		c.cacheItemNumber++
 		log.Info("Add destruct to cache",
-			"cache_account_hash", hash, "cache_version", ly.diffLayerID, "cache_root", ly.root)
+			"cache_account_hash", hash,
+			"cache_version", ly.diffLayerID,
+			"cache_root", ly.root)
 	}
 	for hash, aData := range ly.accountData {
 		if multiVersionItems, exist := c.accountDataCache[hash]; exist {
@@ -107,7 +109,10 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 		}
 		c.cacheItemNumber++
 		log.Info("Add account to cache",
-			"cache_account_hash", hash, "cache_version", ly.diffLayerID, "cache_root", ly.root)
+			"cache_account_hash", hash,
+			"cache_version", ly.diffLayerID,
+			"cache_root", ly.root,
+			"cache_data_len", len(aData))
 	}
 	for accountHash, slots := range ly.storageData {
 		if _, exist := c.storageDataCache[accountHash]; !exist {
@@ -122,7 +127,11 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 			}
 			c.cacheItemNumber++
 			log.Info("Add storage to cache",
-				"cache_account_hash", accountHash, "cache_storage_hash", storageHash, "cache_version", ly.diffLayerID, "cache_root", ly.root)
+				"cache_account_hash", accountHash,
+				"cache_storage_hash", storageHash,
+				"cache_version", ly.diffLayerID,
+				"cache_root", ly.root,
+				"cache_data_len", len(sData))
 		}
 	}
 
@@ -159,9 +168,14 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 		for aHash, multiVersionDestructList := range c.destructCache {
 			for i := 0; i < len(multiVersionDestructList); i++ {
 				if multiVersionDestructList[i].version <= c.minVersion {
+					log.Info("Remove destruct from cache",
+						"cache_account_hash", aHash,
+						"cache_version", multiVersionDestructList[i].version,
+						"cache_root", multiVersionDestructList[i].root)
 					multiVersionDestructList = append(multiVersionDestructList[:i], multiVersionDestructList[i+1:]...)
 					i--
 					c.cacheItemNumber--
+
 				}
 			}
 			if len(multiVersionDestructList) == 0 {
@@ -172,6 +186,11 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 		for aHash, multiVersionAccoutList := range c.accountDataCache {
 			for i := 0; i < len(multiVersionAccoutList); i++ {
 				if multiVersionAccoutList[i].version <= c.minVersion {
+					log.Info("Remove account from cache",
+						"cache_account_hash", aHash,
+						"cache_version", multiVersionAccoutList[i].version,
+						"cache_root", multiVersionAccoutList[i].root,
+						"cache_data_len", len(multiVersionAccoutList[i].data))
 					multiVersionAccoutList = append(multiVersionAccoutList[:i], multiVersionAccoutList[i+1:]...)
 					i--
 					c.cacheItemNumber--
@@ -185,6 +204,12 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 			for sHash, multiVersionStorageList := range c.storageDataCache[aHash] {
 				for i := 0; i < len(multiVersionStorageList); i++ {
 					if multiVersionStorageList[i].version <= c.minVersion {
+						log.Info("Remove storage from cache",
+							"cache_account_hash", aHash,
+							"cache_storage_hash", sHash,
+							"cache_version", multiVersionStorageList[i].version,
+							"cache_root", multiVersionStorageList[i].root,
+							"cache_data_len", len(multiVersionStorageList[i].data))
 						multiVersionStorageList = append(multiVersionStorageList[:i], multiVersionStorageList[i+1:]...)
 						i--
 						c.cacheItemNumber--

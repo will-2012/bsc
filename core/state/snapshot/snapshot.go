@@ -384,6 +384,7 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	}
 	snap := parent.(snapshot).Update(blockRoot, destructs, accounts, storage, verified)
 
+	log.Info("Add cache due to new difflayer", "diff_root", snap.root, "diff_version", snap.diffLayerID)
 	snap.multiVersionCache.AddDiffLayer(snap)
 
 	// Save the new snapshot for later
@@ -440,6 +441,7 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 
 		for _, ly := range t.layers {
 			if diff, ok := ly.(*diffLayer); ok {
+				log.Info("Cleanup cache due to layers=0", "diff_root", diff.root, "diff_version", diff.diffLayerID)
 				diff.multiVersionCache.RemoveDiffLayer(diff)
 			}
 		}
@@ -463,6 +465,7 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		if df, exist := t.layers[root]; exist {
 			if diff, ok := df.(*diffLayer); ok {
 				// Clean up the hash cache of the child difflayer corresponding to the stale parent, include the re-org case.
+				log.Info("Cleanup cache due to reorg", "diff_root", diff.root, "diff_version", diff.diffLayerID)
 				diff.multiVersionCache.RemoveDiffLayer(diff)
 				log.Debug("Cleanup difflayer multiversion cache due to reorg", "diff_root", diff.root.String(), "diff_layer_version", diff.diffLayerID)
 			}
@@ -557,9 +560,11 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 
 		if oldlayer, exist := t.layers[flattened.root]; exist {
 			if oldDifflayer, ok := oldlayer.(*diffLayer); ok {
+				log.Info("Cleanup old cache", "diff_root", oldDifflayer.root, "diff_version", oldDifflayer.diffLayerID)
 				oldDifflayer.multiVersionCache.RemoveDiffLayer(oldDifflayer)
 			}
 		}
+		log.Info("Add cache", "diff_root", flattened.root, "diff_version", flattened.diffLayerID)
 		flattened.multiVersionCache.AddDiffLayer(flattened)
 		t.layers[flattened.root] = flattened
 
@@ -730,7 +735,8 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		res.genAbort = make(chan chan *generatorStats)
 		go res.generate(stats)
 	}
-	// bottom.multiVersionCache.RemoveDiffLayer(bottom)
+	log.Info("Cleanup cache due to bottom difflayer is eaten by disklayer", "diff_root", bottom.root, "diff_version", bottom.diffLayerID)
+	bottom.multiVersionCache.RemoveDiffLayer(bottom)
 	return res
 }
 

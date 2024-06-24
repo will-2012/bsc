@@ -353,6 +353,7 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 				log.Warn("Account has bug due to query disklayer", "error", err)
 				diffMultiVersionCacheBugMeter.Mark(1)
 			}
+			dl.lock.RUnlock()
 			return data, err
 		}
 		log.Warn("Account has bug due to query multi version cache", "error", err)
@@ -447,6 +448,7 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 				log.Warn("Storage has bug due to query disklayer", "error", err)
 				diffMultiVersionCacheBugMeter.Mark(1)
 			}
+			dl.lock.RUnlock()
 			return data, err
 		}
 		log.Warn("Storage has bug due to query multi version cache", "error", err)

@@ -527,6 +527,7 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 // survival is only known *after* capping, we need to omit it from the count if
 // we want to ensure that *at least* the requested number of diff layers remain.
 func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
+	log.Info("Begin to cap", "diff_root", diff.root, "diff_version", diff.diffLayerID, "cap_number", layers)
 	// Dive until we run out of layers or reach the persistent database
 	for i := 0; i < layers-1; i++ {
 		// If we still have diff layers below, continue down

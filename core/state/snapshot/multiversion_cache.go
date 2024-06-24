@@ -208,12 +208,21 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 
 	{
 		if multiVersionItems, exist := c.accountDataCache[ahash]; exist && len(multiVersionItems) != 0 {
-			log.Info("Account hit account cache")
+			log.Info("Try query account cache",
+				"query_version", version,
+				"query_root_hash", rootHash,
+				"query_account_hash", ahash)
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
 					multiVersionItems[i].version > c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryAccountItem = multiVersionItems[i]
+					log.Info("Account hit account cache",
+						"query_version", version,
+						"query_root_hash", rootHash,
+						"query_account_hash", ahash,
+						"hit_version", queryAccountItem.version,
+						"hit_root_hash", queryAccountItem.root)
 				}
 			}
 		}
@@ -221,12 +230,21 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 
 	{
 		if multiVersionItems, exist := c.destructCache[ahash]; exist && len(multiVersionItems) != 0 {
-			log.Info("Account hit destruct cache")
+			log.Info("Try query destruct cache",
+				"query_version", version,
+				"query_root_hash", rootHash,
+				"query_account_hash", ahash)
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
 					multiVersionItems[i].version > c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
+					log.Info("Account hit destruct cache",
+						"query_version", version,
+						"query_root_hash", rootHash,
+						"query_account_hash", ahash,
+						"hit_version", queryDestructItem.version,
+						"hit_root_hash", queryDestructItem.root)
 				}
 			}
 		}
@@ -270,12 +288,23 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 
 		if _, exist := c.storageDataCache[ahash]; exist {
 			if multiVersionItems, exist2 := c.storageDataCache[ahash][shash]; exist2 && len(multiVersionItems) != 0 {
-				log.Info("Storage hit storage cache")
+				log.Info("Try query storage cache",
+					"query_version", version,
+					"query_root_hash", rootHash,
+					"query_account_hash", ahash,
+					"query_storage_hash", shash)
 				for i := len(multiVersionItems) - 1; i >= 0; i-- {
 					if multiVersionItems[i].version <= version &&
 						multiVersionItems[i].version > c.minVersion &&
 						c.checkParent(rootHash, multiVersionItems[i].root) {
 						queryStorageItem = multiVersionItems[i]
+						log.Info("Account hit storage cache",
+							"query_version", version,
+							"query_root_hash", rootHash,
+							"query_account_hash", ahash,
+							"query_storage_hash", shash,
+							"hit_version", queryStorageItem.version,
+							"hit_root_hash", queryStorageItem.root)
 					}
 				}
 			}
@@ -284,12 +313,23 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 
 	{
 		if multiVersionItems, exist := c.destructCache[ahash]; exist && len(multiVersionItems) != 0 {
-			log.Info("Storage hit destruct cache")
+			log.Info("Try query destruct cache",
+				"query_version", version,
+				"query_root_hash", rootHash,
+				"query_account_hash", ahash,
+				"query_storage_hash", shash)
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
 					multiVersionItems[i].version > c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
+					log.Info("Account hit destruct cache",
+						"query_version", version,
+						"query_root_hash", rootHash,
+						"query_account_hash", ahash,
+						"query_storage_hash", shash,
+						"hit_version", queryDestructItem.version,
+						"hit_root_hash", queryDestructItem.root)
 				}
 			}
 		}

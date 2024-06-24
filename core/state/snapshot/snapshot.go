@@ -493,25 +493,25 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		rebloom(persisted.root)
 	}
 
-	// reset parent map
-	var multiVersioncache *MultiVersionSnapshotCache
-	newDiffLayerParent := make(map[common.Hash]map[common.Hash]struct{})
-	for _, ly := range t.layers {
-		diffly, ok := ly.(*diffLayer)
-		for ok {
-			multiVersioncache = diffly.multiVersionCache
-			if parently, ok2 := diffly.Parent().(*diffLayer); ok2 {
-				if parentLayerParent, exist := newDiffLayerParent[diffly.root]; exist {
-					parentLayerParent[parently.root] = struct{}{}
-				} else {
-					newDiffLayerParent[diffly.root] = make(map[common.Hash]struct{})
-					newDiffLayerParent[diffly.root][diffly.root] = struct{}{}
-				}
-			}
-			diffly, ok = ly.Parent().(*diffLayer)
-		}
-	}
-	multiVersioncache.ResetParentMap(newDiffLayerParent)
+	// todo: reset parent map
+	//var multiVersioncache *MultiVersionSnapshotCache
+	//newDiffLayerParent := make(map[common.Hash]map[common.Hash]struct{})
+	//for _, ly := range t.layers {
+	//	diffly, ok := ly.(*diffLayer)
+	//	for ok {
+	//		multiVersioncache = diffly.multiVersionCache
+	//		if parently, ok2 := diffly.Parent().(*diffLayer); ok2 {
+	//			if parentLayerParent, exist := newDiffLayerParent[diffly.root]; exist {
+	//				parentLayerParent[parently.root] = struct{}{}
+	//			} else {
+	//				newDiffLayerParent[diffly.root] = make(map[common.Hash]struct{})
+	//				newDiffLayerParent[diffly.root][diffly.root] = struct{}{}
+	//			}
+	//		}
+	//		diffly, ok = ly.Parent().(*diffLayer)
+	//	}
+	//}
+	//multiVersioncache.ResetParentMap(newDiffLayerParent)
 	log.Debug("Snapshot capped", "root", root)
 	return nil
 }

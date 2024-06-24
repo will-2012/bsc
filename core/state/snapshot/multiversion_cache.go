@@ -93,6 +93,8 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 		} else {
 			c.destructCache[hash] = []*destructCacheItem{&destructCacheItem{version: ly.diffLayerID, root: ly.root}}
 		}
+		log.Info("Add destruct to cache",
+			"cache_account_hash", hash, "cache_version", ly.diffLayerID, "cache_root", ly.root)
 	}
 	for hash, aData := range ly.accountData {
 		if multiVersionItems, exist := c.accountDataCache[hash]; exist {
@@ -101,6 +103,8 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 		} else {
 			c.accountDataCache[hash] = []*accountCacheItem{&accountCacheItem{version: ly.diffLayerID, root: ly.root, data: aData}}
 		}
+		log.Info("Add account to cache",
+			"cache_account_hash", hash, "cache_version", ly.diffLayerID, "cache_root", ly.root)
 	}
 	for accountHash, slots := range ly.storageData {
 		if _, exist := c.storageDataCache[accountHash]; !exist {
@@ -113,6 +117,8 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 			} else {
 				c.storageDataCache[accountHash][storageHash] = []*storageCacheItem{&storageCacheItem{version: ly.diffLayerID, root: ly.root, data: sData}}
 			}
+			log.Info("Add storage to cache",
+				"cache_account_hash", accountHash, "cache_storage_hash", storageHash, "cache_version", ly.diffLayerID, "cache_root", ly.root)
 		}
 	}
 

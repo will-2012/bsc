@@ -568,15 +568,17 @@ func (dl *diffLayer) flatten() snapshot {
 	}
 	// Return the combo parent
 	return &diffLayer{
-		parent:      parent.parent,
-		origin:      parent.origin,
-		root:        dl.root,
-		destructSet: parent.destructSet,
-		accountData: parent.accountData,
-		storageData: parent.storageData,
-		storageList: make(map[common.Hash][]common.Hash),
-		diffed:      dl.diffed,
-		memory:      parent.memory + dl.memory,
+		parent:            parent.parent,
+		origin:            parent.origin,
+		diffLayerID:       dl.diffLayerID,
+		multiVersionCache: dl.multiVersionCache,
+		root:              dl.root,
+		destructSet:       parent.destructSet,
+		accountData:       parent.accountData,
+		storageData:       parent.storageData,
+		storageList:       make(map[common.Hash][]common.Hash),
+		diffed:            dl.diffed,
+		memory:            parent.memory + dl.memory,
 	}
 }
 

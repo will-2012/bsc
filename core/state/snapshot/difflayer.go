@@ -27,6 +27,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	bloomfilter "github.com/holiman/bloomfilter/v2"
 	"golang.org/x/exp/slices"
@@ -338,7 +339,17 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 		dl.lock.RUnlock()
 		return nil, ErrSnapshotStale
 	}
-	// todo: try fastpath
+	{
+		// try fastpath
+		data, needTryDisk, err := dl.multiVersionCache.QueryAccount(dl.diffLayerID, dl.root, hash)
+		if err == nil {
+			if needTryDisk {
+				return dl.origin.AccountRLP(hash)
+			}
+			return data, nil
+		}
+		log.Info("Has bug", "error", err)
+	}
 
 	// Check the bloom filter first whether there's even a point in reaching into
 	// all the maps in all the layers below
@@ -413,6 +424,18 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 		dl.lock.RUnlock()
 		return nil, ErrSnapshotStale
 	}
+	{
+		// try fastpath
+		data, needTryDisk, err := dl.multiVersionCache.QueryStorage(dl.diffLayerID, dl.root, accountHash, storageHash)
+		if err == nil {
+			if needTryDisk {
+				return dl.origin.Storage(accountHash, storageHash)
+			}
+			return data, nil
+		}
+		log.Info("Has bug", "error", err)
+	}
+
 	hit := dl.diffed.ContainsHash(storageBloomHash(accountHash, storageHash))
 	if !hit {
 		hit = dl.diffed.ContainsHash(destructBloomHash(accountHash))

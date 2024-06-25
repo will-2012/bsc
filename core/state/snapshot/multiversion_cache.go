@@ -230,13 +230,18 @@ func (c *MultiVersionSnapshotCache) loopDelayGC() {
 			c.lock.RLock()
 			deltaQueueLen := len(c.deltaRemoveQueue)
 			c.lock.RUnlock()
-			if deltaQueueLen > 10 {
+			if deltaQueueLen > 500 {
 				c.lock.Lock()
 				gcDifflayer := c.deltaRemoveQueue[0] //opt
 				if gcDifflayer.diffLayerID > c.minVersion {
 					c.minVersion = gcDifflayer.diffLayerID
 				}
-				log.Info("Delay remove difflayer from snapshot multiversion cache", "root", gcDifflayer.root, "version_id", gcDifflayer.diffLayerID, "current_cache_item_number", c.cacheItemNumber)
+				log.Info("Delay remove difflayer from snapshot multiversion cache",
+					"root", gcDifflayer.root,
+					"version_id", gcDifflayer.diffLayerID,
+					"current_cache_item_number", c.cacheItemNumber,
+					"deleted_difflayer_number", deltaQueueLen,
+					"min_version", c.minVersion)
 
 				for aHash, multiVersionDestructList := range c.destructCache {
 					for i := 0; i < len(multiVersionDestructList); i++ {

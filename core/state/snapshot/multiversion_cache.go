@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
@@ -78,12 +79,14 @@ type MultiVersionSnapshotCache struct {
 	minVersion       uint64 // bottom version
 	diffLayerParent  map[common.Hash]map[common.Hash]struct{}
 	cacheItemNumber  int64
+
+	deltaRemoveQueue []*diffLayer
 }
 
 // todo: add gc workflow.
 
 func NewMultiVersionSnapshotCache() *MultiVersionSnapshotCache {
-	return &MultiVersionSnapshotCache{
+	c := &MultiVersionSnapshotCache{
 		destructCache:    make(map[common.Hash][]*destructCacheItem),
 		accountDataCache: make(map[common.Hash][]*accountCacheItem),
 		storageDataCache: make(map[common.Hash]map[common.Hash][]*storageCacheItem),
@@ -91,6 +94,8 @@ func NewMultiVersionSnapshotCache() *MultiVersionSnapshotCache {
 		diffLayerParent:  make(map[common.Hash]map[common.Hash]struct{}),
 		cacheItemNumber:  0,
 	}
+	go c.loopDelayGC()
+	return c
 }
 
 func (c *MultiVersionSnapshotCache) checkParent(childRoot common.Hash, parentRoot common.Hash) bool {
@@ -212,16 +217,131 @@ func (c *MultiVersionSnapshotCache) AddDiffLayer(ly *diffLayer) {
 	diffMultiVersionCacheLengthGauge.Update(c.cacheItemNumber)
 }
 
+func (c *MultiVersionSnapshotCache) loopDelayGC() {
+	if c == nil {
+		return
+	}
+
+	gcTicker := time.NewTicker(time.Second * 1)
+	defer gcTicker.Stop()
+	for {
+		select {
+		case <-gcTicker.C:
+			c.lock.RLock()
+			deltaQueueLen := len(c.deltaRemoveQueue)
+			c.lock.RUnlock()
+			if deltaQueueLen > 10 {
+				c.lock.Lock()
+				gcDifflayer := c.deltaRemoveQueue[0] //opt
+				if gcDifflayer.diffLayerID > c.minVersion {
+					c.minVersion = gcDifflayer.diffLayerID
+				}
+				log.Info("Delay remove difflayer from snapshot multiversion cache", "root", gcDifflayer.root, "version_id", gcDifflayer.diffLayerID, "current_cache_item_number", c.cacheItemNumber)
+
+				for aHash, multiVersionDestructList := range c.destructCache {
+					for i := 0; i < len(multiVersionDestructList); i++ {
+						if multiVersionDestructList[i].version < c.minVersion {
+							log.Info("Remove destruct from cache",
+								"cache_account_hash", aHash,
+								"cache_version", multiVersionDestructList[i].version,
+								"cache_root", multiVersionDestructList[i].root,
+								"min_version", c.minVersion,
+								"gc_diff_root", gcDifflayer.root,
+								"gc_diff_version", gcDifflayer.diffLayerID)
+							multiVersionDestructList = append(multiVersionDestructList[:i], multiVersionDestructList[i+1:]...)
+							i--
+							c.cacheItemNumber--
+
+						}
+					}
+					if len(multiVersionDestructList) == 0 {
+						delete(c.destructCache, aHash)
+					} else {
+						c.destructCache[aHash] = multiVersionDestructList
+					}
+				}
+
+				for aHash, multiVersionAccoutList := range c.accountDataCache {
+					for i := 0; i < len(multiVersionAccoutList); i++ {
+						if multiVersionAccoutList[i].version < c.minVersion {
+							log.Info("Remove account from cache",
+								"cache_account_hash", aHash,
+								"cache_version", multiVersionAccoutList[i].version,
+								"cache_root", multiVersionAccoutList[i].root,
+								"cache_data_len", len(multiVersionAccoutList[i].data),
+								"min_version", c.minVersion,
+								"gc_diff_root", gcDifflayer.root,
+								"gc_diff_version", gcDifflayer.diffLayerID)
+							multiVersionAccoutList = append(multiVersionAccoutList[:i], multiVersionAccoutList[i+1:]...)
+							i--
+							c.cacheItemNumber--
+						}
+					}
+					if len(multiVersionAccoutList) == 0 {
+						delete(c.accountDataCache, aHash)
+					} else {
+						c.accountDataCache[aHash] = multiVersionAccoutList
+					}
+				}
+				for aHash := range c.storageDataCache {
+					for sHash, multiVersionStorageList := range c.storageDataCache[aHash] {
+						for i := 0; i < len(multiVersionStorageList); i++ {
+							if multiVersionStorageList[i].version < c.minVersion {
+								log.Info("Remove storage from cache",
+									"cache_account_hash", aHash,
+									"cache_storage_hash", sHash,
+									"cache_version", multiVersionStorageList[i].version,
+									"cache_root", multiVersionStorageList[i].root,
+									"cache_data_len", len(multiVersionStorageList[i].data),
+									"min_version", c.minVersion,
+									"gc_diff_root", gcDifflayer.root,
+									"gc_diff_version", gcDifflayer.diffLayerID)
+								multiVersionStorageList = append(multiVersionStorageList[:i], multiVersionStorageList[i+1:]...)
+								i--
+								c.cacheItemNumber--
+							}
+						}
+						if len(multiVersionStorageList) == 0 {
+							delete(c.storageDataCache[aHash], sHash)
+						} else {
+							c.storageDataCache[aHash][sHash] = multiVersionStorageList
+						}
+					}
+					if len(c.storageDataCache[aHash]) == 0 {
+						delete(c.storageDataCache, aHash)
+					}
+				}
+
+				// todo: gc old version
+				delete(c.diffLayerParent, gcDifflayer.root)
+				for _, v := range c.diffLayerParent {
+					delete(v, gcDifflayer.root)
+				}
+				diffMultiVersionCacheLengthGauge.Update(c.cacheItemNumber)
+				c.deltaRemoveQueue = c.deltaRemoveQueue[1:]
+				c.lock.Unlock()
+			} else {
+				log.Info("Skip delay gc due to less difflayer in queue", "deleted_difflayer_number", deltaQueueLen)
+			}
+
+		}
+	}
+}
+
 func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 	if c == nil || ly == nil {
 		return
 	}
+
 	if old := ly.hasCleanupCache.Swap(true); old {
 		log.Info("Skip repeated remove cache", "diff_root", ly.root, "diff_version", ly.diffLayerID)
 		return
 	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
+
+	c.deltaRemoveQueue = append(c.deltaRemoveQueue, ly)
+	return
 
 	if ly.diffLayerID > c.minVersion {
 		c.minVersion = ly.diffLayerID

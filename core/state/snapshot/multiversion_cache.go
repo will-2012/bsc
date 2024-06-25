@@ -80,6 +80,8 @@ type MultiVersionSnapshotCache struct {
 	cacheItemNumber  int64
 }
 
+// todo: add gc workflow.
+
 func NewMultiVersionSnapshotCache() *MultiVersionSnapshotCache {
 	return &MultiVersionSnapshotCache{
 		destructCache:    make(map[common.Hash][]*destructCacheItem),
@@ -215,6 +217,7 @@ func (c *MultiVersionSnapshotCache) RemoveDiffLayer(ly *diffLayer) {
 		return
 	}
 	if old := ly.hasCleanupCache.Swap(true); old {
+		log.Info("Skip repeated remove cache", "diff_root", ly.root, "diff_version", ly.diffLayerID)
 		return
 	}
 	c.lock.Lock()
@@ -321,7 +324,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 				"multi_version_cache_len", len(multiVersionItems))
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
-					multiVersionItems[i].version >= c.minVersion &&
+					multiVersionItems[i].version > c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryAccountItem = multiVersionItems[i]
 					log.Info("Account hit account cache",
@@ -338,7 +341,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 					"query_account_hash", ahash,
 					"try_hit_version", multiVersionItems[i].version,
 					"try_hit_root_hash", multiVersionItems[i].root,
-					"check_version", multiVersionItems[i].version >= c.minVersion,
+					"check_version", multiVersionItems[i].version > c.minVersion,
 					"check_parent", c.checkParent(rootHash, multiVersionItems[i].root),
 					"check_data_len", len(multiVersionItems[i].data))
 			}
@@ -354,7 +357,7 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 				"multi_version_cache_len", len(multiVersionItems))
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
-					multiVersionItems[i].version >= c.minVersion &&
+					multiVersionItems[i].version > c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
 					log.Info("Account hit destruct cache",
@@ -419,7 +422,7 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 					"multi_version_cache_len", len(multiVersionItems))
 				for i := len(multiVersionItems) - 1; i >= 0; i-- {
 					if multiVersionItems[i].version <= version &&
-						multiVersionItems[i].version >= c.minVersion &&
+						multiVersionItems[i].version > c.minVersion &&
 						c.checkParent(rootHash, multiVersionItems[i].root) {
 						queryStorageItem = multiVersionItems[i]
 						log.Info("Account hit storage cache",
@@ -453,7 +456,7 @@ func (c *MultiVersionSnapshotCache) QueryStorage(version uint64, rootHash common
 				"multi_version_cache_len", len(multiVersionItems))
 			for i := len(multiVersionItems) - 1; i >= 0; i-- {
 				if multiVersionItems[i].version <= version &&
-					multiVersionItems[i].version >= c.minVersion &&
+					multiVersionItems[i].version > c.minVersion &&
 					c.checkParent(rootHash, multiVersionItems[i].root) {
 					queryDestructItem = multiVersionItems[i]
 					log.Info("Account hit destruct cache",

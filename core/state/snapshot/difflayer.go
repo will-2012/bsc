@@ -574,6 +574,7 @@ func (dl *diffLayer) Update(blockRoot common.Hash, destructs map[common.Hash]str
 // flatten pushes all data from this point downwards, flattening everything into
 // a single diff at the bottom. Since usually the lowermost diff is the largest,
 // the flattening builds up from there in reverse.
+// eat parent difflayer.
 func (dl *diffLayer) flatten() snapshot {
 	// If the parent is not diff, we're the first in line, return unmodified
 	parent, ok := dl.parent.(*diffLayer)
@@ -594,8 +595,9 @@ func (dl *diffLayer) flatten() snapshot {
 		panic("parent diff layer is stale") // we've flattened into the same parent from two children, boo
 	}
 	// ??
-	log.Info("Cleanup cache due to flatten", "diff_root", parent.root, "diff_version", parent.diffLayerID)
-	parent.multiVersionCache.RemoveDiffLayer(parent) //
+	// log.Info("Cleanup cache due to flatten", "diff_root", parent.root, "diff_version", parent.diffLayerID)
+	// parent.multiVersionCache.RemoveDiffLayer(parent)  // has delete by stale
+
 	// Overwrite all the updated accounts blindly, merge the sorted list
 	for hash := range dl.destructSet {
 		parent.destructSet[hash] = struct{}{}

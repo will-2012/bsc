@@ -337,7 +337,10 @@ func (c *MultiVersionSnapshotCache) QueryAccount(version uint64, rootHash common
 					"query_root_hash", rootHash,
 					"query_account_hash", ahash,
 					"try_hit_version", multiVersionItems[i].version,
-					"try_hit_root_hash", multiVersionItems[i].root)
+					"try_hit_root_hash", multiVersionItems[i].root,
+					"check_version", multiVersionItems[i].version >= c.minVersion,
+					"check_parent", c.checkParent(rootHash, multiVersionItems[i].root),
+					"check_data_len", len(multiVersionItems[i].data))
 			}
 		}
 	}

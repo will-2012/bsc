@@ -595,7 +595,7 @@ func (dl *diffLayer) flatten() snapshot {
 	}
 	// ??
 	log.Info("Cleanup cache due to flatten", "diff_root", parent.root, "diff_version", parent.diffLayerID)
-	parent.multiVersionCache.RemoveDiffLayer(parent)
+	parent.multiVersionCache.RemoveDiffLayer(parent) //
 	// Overwrite all the updated accounts blindly, merge the sorted list
 	for hash := range dl.destructSet {
 		parent.destructSet[hash] = struct{}{}

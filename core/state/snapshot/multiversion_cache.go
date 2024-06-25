@@ -102,8 +102,8 @@ func (c *MultiVersionSnapshotCache) checkParent(childRoot common.Hash, parentRoo
 	if c == nil {
 		return false
 	}
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	//c.lock.RLock()
+	//defer c.lock.RUnlock()
 	if _, exist := c.diffLayerParent[childRoot]; !exist {
 		return false
 	}

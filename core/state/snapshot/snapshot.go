@@ -564,8 +564,8 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 		//		oldDifflayer.multiVersionCache.RemoveDiffLayer(oldDifflayer)
 		//	}
 		//}
-		//log.Info("Add cache", "diff_root", flattened.root, "diff_version", flattened.diffLayerID)
-		//flattened.multiVersionCache.AddDiffLayer(flattened)
+		log.Info("Add cache", "diff_root", flattened.root, "diff_version", flattened.diffLayerID)
+		flattened.multiVersionCache.AddDiffLayer(flattened)
 		t.layers[flattened.root] = flattened
 
 		// Invoke the hook if it's registered. Ugly hack.

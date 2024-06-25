@@ -200,6 +200,10 @@ func newDiffLayer(parent snapshot, root common.Hash, destructs map[common.Hash]s
 	return dl
 }
 
+func (dl *diffLayer) AddMultiVersionCache() {
+	dl.multiVersionCache.AddDiffLayer(dl)
+}
+
 // rebloom discards the layer's current bloom and rebuilds it from scratch based
 // on the parent's and the local diffs.
 func (dl *diffLayer) rebloom(origin *diskLayer) {

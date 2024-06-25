@@ -423,9 +423,9 @@ func (dl *diffLayer) accountRLP(hash common.Hash, depth int) ([]byte, common.Has
 		snapshotDirtyAccountHitDepthHist.Update(int64(depth))
 		snapshotDirtyAccountReadMeter.Mark(int64(len(data)))
 		snapshotBloomAccountTrueHitMeter.Mark(1)
-		if len(data) == 79 {
-			log.Info("Hit difflayer map", "account_hash", hash, "depth", depth, "diff_root", dl.root, "diff_version", dl.diffLayerID)
-		}
+		//if len(data) == 79 {
+		//	log.Info("Hit difflayer map", "account_hash", hash, "depth", depth, "diff_root", dl.root, "diff_version", dl.diffLayerID)
+		//}
 		return data, common.Hash{}, nil
 	}
 	// If the account is known locally, but deleted, return it

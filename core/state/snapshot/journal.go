@@ -111,6 +111,7 @@ func loadAndParseJournal(db ethdb.KeyValueStore, base *diskLayer) (snapshot, jou
 	var current snapshot = base
 	err := iterateJournal(db, func(parent common.Hash, root common.Hash, destructSet map[common.Hash]struct{}, accountData map[common.Hash][]byte, storageData map[common.Hash]map[common.Hash][]byte) error {
 		current = newDiffLayer(current, root, destructSet, accountData, storageData, nil)
+		// todo:
 		return nil
 	})
 	if err != nil {

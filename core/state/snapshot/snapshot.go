@@ -234,7 +234,12 @@ func New(config Config, diskdb ethdb.KeyValueStore, triedb *triedb.Database, roo
 	// Existing snapshot loaded, seed all the layers
 	for head != nil {
 		snap.layers[head.Root()] = head
+		if diff, ok := head.(*diffLayer); ok {
+			log.Info("Add multi version cache at startup", "diff_version", diff.diffLayerID, "diff_root", diff.root)
+			diff.multiVersionCache.AddDiffLayer(diff)
+		}
 		head = head.Parent()
+
 	}
 	log.Info("Snapshot loaded", "diskRoot", snap.diskRoot(), "root", root)
 	return snap, nil

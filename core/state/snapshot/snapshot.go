@@ -234,7 +234,12 @@ func New(config Config, diskdb ethdb.KeyValueStore, triedb *triedb.Database, roo
 	// Existing snapshot loaded, seed all the layers
 	for head != nil {
 		snap.layers[head.Root()] = head
+		//if diff, ok := head.(*diffLayer); ok {
+		//	log.Info("Add multi version cache at startup", "diff_version", diff.diffLayerID, "diff_root", diff.root)
+		//	diff.multiVersionCache.AddDiffLayer(diff)
+		//}
 		head = head.Parent()
+
 	}
 	log.Info("Snapshot loaded", "diskRoot", snap.diskRoot(), "root", root)
 	return snap, nil
@@ -384,12 +389,15 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	}
 	snap := parent.(snapshot).Update(blockRoot, destructs, accounts, storage, verified)
 
+	log.Info("Add cache due to new difflayer", "diff_root", snap.root, "diff_version", snap.diffLayerID)
+	snap.multiVersionCache.AddDiffLayer(snap)
+
 	// Save the new snapshot for later
 	t.lock.Lock()
 	defer t.lock.Unlock()
 
 	t.layers[snap.root] = snap
-	log.Debug("Snapshot updated", "blockRoot", blockRoot)
+	log.Info("Snapshot updated", "blockRoot", blockRoot, "difflayer_version", snap.diffLayerID)
 	return nil
 }
 
@@ -436,6 +444,13 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		base := diffToDisk(diff.flatten().(*diffLayer))
 		diff.lock.RUnlock()
 
+		for _, ly := range t.layers {
+			if diff, ok := ly.(*diffLayer); ok {
+				log.Info("Cleanup cache due to layers=0", "diff_root", diff.root, "diff_version", diff.diffLayerID)
+				diff.multiVersionCache.RemoveDiffLayer(diff)
+			}
+		}
+
 		// Replace the entire snapshot tree with the flat base
 		t.layers = map[common.Hash]snapshot{base.root: base}
 		return nil
@@ -452,6 +467,14 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 	}
 	var remove func(root common.Hash)
 	remove = func(root common.Hash) {
+		if df, exist := t.layers[root]; exist {
+			if diff, ok := df.(*diffLayer); ok {
+				// Clean up the hash cache of the child difflayer corresponding to the stale parent, include the re-org case.
+				log.Info("Cleanup cache due to reorg", "diff_root", diff.root, "diff_version", diff.diffLayerID)
+				diff.multiVersionCache.RemoveDiffLayer(diff)
+				log.Debug("Cleanup difflayer multiversion cache due to reorg", "diff_root", diff.root.String(), "diff_layer_version", diff.diffLayerID)
+			}
+		}
 		delete(t.layers, root)
 		for _, child := range children[root] {
 			remove(child)
@@ -459,7 +482,7 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		delete(children, root)
 	}
 	for root, snap := range t.layers {
-		if snap.Stale() {
+		if snap.Stale() { // ??
 			remove(root)
 		}
 	}
@@ -476,6 +499,26 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 		}
 		rebloom(persisted.root)
 	}
+
+	// todo: reset parent map
+	//var multiVersioncache *MultiVersionSnapshotCache
+	//newDiffLayerParent := make(map[common.Hash]map[common.Hash]struct{})
+	//for _, ly := range t.layers {
+	//	diffly, ok := ly.(*diffLayer)
+	//	for ok {
+	//		multiVersioncache = diffly.multiVersionCache
+	//		if parently, ok2 := diffly.Parent().(*diffLayer); ok2 {
+	//			if parentLayerParent, exist := newDiffLayerParent[diffly.root]; exist {
+	//				parentLayerParent[parently.root] = struct{}{}
+	//			} else {
+	//				newDiffLayerParent[diffly.root] = make(map[common.Hash]struct{})
+	//				newDiffLayerParent[diffly.root][diffly.root] = struct{}{}
+	//			}
+	//		}
+	//		diffly, ok = ly.Parent().(*diffLayer)
+	//	}
+	//}
+	//multiVersioncache.ResetParentMap(newDiffLayerParent)
 	log.Debug("Snapshot capped", "root", root)
 	return nil
 }
@@ -492,6 +535,7 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 // survival is only known *after* capping, we need to omit it from the count if
 // we want to ensure that *at least* the requested number of diff layers remain.
 func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
+	log.Info("Begin to cap", "diff_root", diff.root, "diff_version", diff.diffLayerID, "cap_number", layers)
 	// Dive until we run out of layers or reach the persistent database
 	for i := 0; i < layers-1; i++ {
 		// If we still have diff layers below, continue down
@@ -518,6 +562,15 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 		// Flatten the parent into the grandparent. The flattening internally obtains a
 		// write lock on grandparent.
 		flattened := parent.flatten().(*diffLayer)
+
+		//if oldlayer, exist := t.layers[flattened.root]; exist {
+		//	if oldDifflayer, ok := oldlayer.(*diffLayer); ok {
+		//		log.Info("Cleanup old cache", "diff_root", oldDifflayer.root, "diff_version", oldDifflayer.diffLayerID)
+		//		oldDifflayer.multiVersionCache.RemoveDiffLayer(oldDifflayer)
+		//	}
+		//}
+		log.Info("Add cache", "diff_root", flattened.root, "diff_version", flattened.diffLayerID)
+		flattened.multiVersionCache.AddDiffLayer(flattened)
 		t.layers[flattened.root] = flattened
 
 		// Invoke the hook if it's registered. Ugly hack.
@@ -575,6 +628,7 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		panic("parent disk layer is stale") // we've committed into the same base from two children, boo
 	}
 	base.stale = true
+	log.Info("Make old disklayer stale", "disklayer_root", base.root)
 	base.lock.Unlock()
 
 	// Destroy all the destructed accounts from the database
@@ -667,7 +721,7 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 	if err := batch.Write(); err != nil {
 		log.Crit("Failed to write leftover snapshot", "err", err)
 	}
-	log.Debug("Journalled disk layer", "root", bottom.root, "complete", base.genMarker == nil)
+	log.Info("Journalled disk layer", "root", bottom.root, "complete", base.genMarker == nil)
 	res := &diskLayer{
 		root:       bottom.root,
 		cache:      base.cache,
@@ -686,6 +740,8 @@ func diffToDisk(bottom *diffLayer) *diskLayer {
 		res.genAbort = make(chan chan *generatorStats)
 		go res.generate(stats)
 	}
+	log.Info("Cleanup cache due to bottom difflayer is eaten by disklayer", "diff_root", bottom.root, "diff_version", bottom.diffLayerID)
+	bottom.multiVersionCache.RemoveDiffLayer(bottom)
 	return res
 }
 

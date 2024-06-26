@@ -17,6 +17,7 @@
 package snapshot
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	bloomfilter "github.com/holiman/bloomfilter/v2"
 	"golang.org/x/exp/slices"
@@ -103,6 +105,11 @@ type diffLayer struct {
 	parent snapshot   // Parent snapshot modified by this one, never nil
 	memory uint64     // Approximate guess as to how much memory we use
 
+	diffLayerID       uint64                     //
+	multiVersionCache *MultiVersionSnapshotCache //
+	hasCleanupCache   atomic.Bool
+	// diffLayerParent   map[common.Hash]map[common.Hash]struct{} //
+
 	root  common.Hash // Root hash to which this snapshot diff belongs to
 	stale atomic.Bool // Signals that the layer became stale (state progressed)
 
@@ -159,8 +166,12 @@ func newDiffLayer(parent snapshot, root common.Hash, destructs map[common.Hash]s
 
 	switch parent := parent.(type) {
 	case *diskLayer:
+		dl.diffLayerID = 1
+		dl.multiVersionCache = NewMultiVersionSnapshotCache()
 		dl.rebloom(parent)
 	case *diffLayer:
+		dl.diffLayerID = parent.diffLayerID + 1
+		dl.multiVersionCache = parent.multiVersionCache
 		dl.rebloom(parent.origin)
 	default:
 		panic("unknown parent type")
@@ -187,6 +198,10 @@ func newDiffLayer(parent snapshot, root common.Hash, destructs map[common.Hash]s
 	}
 	dl.memory += uint64(len(destructs) * common.HashLength)
 	return dl
+}
+
+func (dl *diffLayer) AddMultiVersionCache() {
+	dl.multiVersionCache.AddDiffLayer(dl)
 }
 
 // rebloom discards the layer's current bloom and rebuilds it from scratch based
@@ -329,6 +344,48 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 		dl.lock.RUnlock()
 		return nil, ErrSnapshotStale
 	}
+	{
+		// try fastpath
+		data, needTryDisk, err := dl.multiVersionCache.QueryAccount(dl.diffLayerID, dl.root, hash)
+		if err == nil {
+			if needTryDisk {
+				data, err = dl.origin.AccountRLP(hash) // stale??
+				diffMultiVersionCacheMissMeter.Mark(1)
+			} else {
+				diffMultiVersionCacheHitMeter.Mark(1)
+				diffMultiVersionCacheReadMeter.Mark(int64(len(data)))
+			}
+			if err != nil {
+				log.Warn("Account has bug due to query disklayer", "error", err)
+				diffMultiVersionCacheBugMeter.Mark(1)
+			}
+			dl.lock.RUnlock()
+
+			{
+				// todo: double check
+				expectedData, expectedDiskRoot, expectedErr := dl.accountRLP(hash, 0)
+				if bytes.Compare(data, expectedData) != 0 {
+					log.Warn("Has bug",
+						"query_version", dl.diffLayerID,
+						"query_root", dl.root,
+						"account_hash", hash,
+						"actual_hit_disk", needTryDisk,
+						"expected_hit_disk", expectedDiskRoot != common.Hash{},
+						"actual_disk_root", dl.origin.Root(),
+						"expected_disk_root", expectedDiskRoot,
+						"actual_data_len", len(data),
+						"expected_data_len", len(expectedData),
+						"actual_error", err,
+						"expected_error", expectedErr)
+				}
+
+			}
+			return data, err
+		}
+		log.Warn("Account has bug due to query multi version cache", "error", err)
+		diffMultiVersionCacheBugMeter.Mark(1)
+	}
+
 	// Check the bloom filter first whether there's even a point in reaching into
 	// all the maps in all the layers below
 	hit := dl.diffed.ContainsHash(accountBloomHash(hash))
@@ -348,20 +405,21 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 		return origin.AccountRLP(hash)
 	}
 	// The bloom filter hit, start poking in the internal maps
-	return dl.accountRLP(hash, 0)
+	innerData, _, innerError := dl.accountRLP(hash, 0)
+	return innerData, innerError
 }
 
 // accountRLP is an internal version of AccountRLP that skips the bloom filter
 // checks and uses the internal maps to try and retrieve the data. It's meant
 // to be used if a higher layer's bloom filter hit already.
-func (dl *diffLayer) accountRLP(hash common.Hash, depth int) ([]byte, error) {
+func (dl *diffLayer) accountRLP(hash common.Hash, depth int) ([]byte, common.Hash /*hit_disk*/, error) {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
 	// If the layer was flattened into, consider it invalid (any live reference to
 	// the original should be marked as unusable).
 	if dl.Stale() {
-		return nil, ErrSnapshotStale
+		return nil, common.Hash{}, ErrSnapshotStale
 	}
 	// If the account is known locally, return it
 	if data, ok := dl.accountData[hash]; ok {
@@ -369,7 +427,10 @@ func (dl *diffLayer) accountRLP(hash common.Hash, depth int) ([]byte, error) {
 		snapshotDirtyAccountHitDepthHist.Update(int64(depth))
 		snapshotDirtyAccountReadMeter.Mark(int64(len(data)))
 		snapshotBloomAccountTrueHitMeter.Mark(1)
-		return data, nil
+		//if len(data) == 79 {
+		//	log.Info("Hit difflayer map", "account_hash", hash, "depth", depth, "diff_root", dl.root, "diff_version", dl.diffLayerID)
+		//}
+		return data, common.Hash{}, nil
 	}
 	// If the account is known locally, but deleted, return it
 	if _, ok := dl.destructSet[hash]; ok {
@@ -377,7 +438,7 @@ func (dl *diffLayer) accountRLP(hash common.Hash, depth int) ([]byte, error) {
 		snapshotDirtyAccountHitDepthHist.Update(int64(depth))
 		snapshotDirtyAccountInexMeter.Mark(1)
 		snapshotBloomAccountTrueHitMeter.Mark(1)
-		return nil, nil
+		return nil, common.Hash{}, nil
 	}
 	// Account unknown to this diff, resolve from parent
 	if diff, ok := dl.parent.(*diffLayer); ok {
@@ -385,7 +446,8 @@ func (dl *diffLayer) accountRLP(hash common.Hash, depth int) ([]byte, error) {
 	}
 	// Failed to resolve through diff layers, mark a bloom error and use the disk
 	snapshotBloomAccountFalseHitMeter.Mark(1)
-	return dl.parent.AccountRLP(hash)
+	innerData, innerErr := dl.parent.AccountRLP(hash)
+	return innerData, dl.parent.Root(), innerErr
 }
 
 // Storage directly retrieves the storage data associated with a particular hash,
@@ -402,6 +464,49 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 		dl.lock.RUnlock()
 		return nil, ErrSnapshotStale
 	}
+	{
+		// try fastpath
+		data, needTryDisk, err := dl.multiVersionCache.QueryStorage(dl.diffLayerID, dl.root, accountHash, storageHash)
+		if err == nil {
+			if needTryDisk {
+				data, err = dl.origin.Storage(accountHash, storageHash)
+				diffMultiVersionCacheMissMeter.Mark(1)
+			} else {
+				diffMultiVersionCacheHitMeter.Mark(1)
+				diffMultiVersionCacheReadMeter.Mark(int64(len(data)))
+			}
+			if err != nil {
+				log.Warn("Storage has bug due to query disklayer", "error", err)
+				diffMultiVersionCacheBugMeter.Mark(1)
+			}
+			dl.lock.RUnlock()
+
+			{
+				// todo: double check
+				expectedData, expectedDiskRoot, expectedErr := dl.storage(accountHash, storageHash, 0)
+				if bytes.Compare(data, expectedData) != 0 {
+					log.Warn("Has bug",
+						"query_version", dl.diffLayerID,
+						"query_root", dl.root,
+						"account_hash", accountHash,
+						"storage_hash", storageHash,
+						"actual_hit_disk", needTryDisk,
+						"expected_hit_disk", expectedDiskRoot != common.Hash{},
+						"actual_disk_root", dl.origin.Root(),
+						"expected_disk_root", expectedDiskRoot,
+						"actual_data_len", len(data),
+						"expected_data_len", len(expectedData),
+						"actual_error", err,
+						"expected_error", expectedErr)
+				}
+
+			}
+			return data, err
+		}
+		log.Warn("Storage has bug due to query multi version cache", "error", err)
+		diffMultiVersionCacheBugMeter.Mark(1)
+	}
+
 	hit := dl.diffed.ContainsHash(storageBloomHash(accountHash, storageHash))
 	if !hit {
 		hit = dl.diffed.ContainsHash(destructBloomHash(accountHash))
@@ -419,20 +524,21 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 		return origin.Storage(accountHash, storageHash)
 	}
 	// The bloom filter hit, start poking in the internal maps
-	return dl.storage(accountHash, storageHash, 0)
+	innerData, _, innerError := dl.storage(accountHash, storageHash, 0)
+	return innerData, innerError
 }
 
 // storage is an internal version of Storage that skips the bloom filter checks
 // and uses the internal maps to try and retrieve the data. It's meant  to be
 // used if a higher layer's bloom filter hit already.
-func (dl *diffLayer) storage(accountHash, storageHash common.Hash, depth int) ([]byte, error) {
+func (dl *diffLayer) storage(accountHash, storageHash common.Hash, depth int) ([]byte, common.Hash /*hit_disk*/, error) {
 	dl.lock.RLock()
 	defer dl.lock.RUnlock()
 
 	// If the layer was flattened into, consider it invalid (any live reference to
 	// the original should be marked as unusable).
 	if dl.Stale() {
-		return nil, ErrSnapshotStale
+		return nil, common.Hash{}, ErrSnapshotStale
 	}
 	// If the account is known locally, try to resolve the slot locally
 	if storage, ok := dl.storageData[accountHash]; ok {
@@ -445,7 +551,7 @@ func (dl *diffLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 				snapshotDirtyStorageInexMeter.Mark(1)
 			}
 			snapshotBloomStorageTrueHitMeter.Mark(1)
-			return data, nil
+			return data, common.Hash{}, nil
 		}
 	}
 	// If the account is known locally, but deleted, return an empty slot
@@ -454,7 +560,7 @@ func (dl *diffLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 		//snapshotDirtyStorageHitDepthHist.Update(int64(depth))
 		snapshotDirtyStorageInexMeter.Mark(1)
 		snapshotBloomStorageTrueHitMeter.Mark(1)
-		return nil, nil
+		return nil, common.Hash{}, nil
 	}
 	// Storage slot unknown to this diff, resolve from parent
 	if diff, ok := dl.parent.(*diffLayer); ok {
@@ -462,7 +568,8 @@ func (dl *diffLayer) storage(accountHash, storageHash common.Hash, depth int) ([
 	}
 	// Failed to resolve through diff layers, mark a bloom error and use the disk
 	snapshotBloomStorageFalseHitMeter.Mark(1)
-	return dl.parent.Storage(accountHash, storageHash)
+	innerData, innerError := dl.parent.Storage(accountHash, storageHash)
+	return innerData, dl.parent.Root(), innerError
 }
 
 // Update creates a new layer on top of the existing snapshot diff tree with
@@ -474,6 +581,7 @@ func (dl *diffLayer) Update(blockRoot common.Hash, destructs map[common.Hash]str
 // flatten pushes all data from this point downwards, flattening everything into
 // a single diff at the bottom. Since usually the lowermost diff is the largest,
 // the flattening builds up from there in reverse.
+// eat parent difflayer.
 func (dl *diffLayer) flatten() snapshot {
 	// If the parent is not diff, we're the first in line, return unmodified
 	parent, ok := dl.parent.(*diffLayer)
@@ -493,6 +601,10 @@ func (dl *diffLayer) flatten() snapshot {
 	if parent.stale.Swap(true) {
 		panic("parent diff layer is stale") // we've flattened into the same parent from two children, boo
 	}
+	// ??
+	// log.Info("Cleanup cache due to flatten", "diff_root", parent.root, "diff_version", parent.diffLayerID)
+	// parent.multiVersionCache.RemoveDiffLayer(parent)  // has delete by stale
+
 	// Overwrite all the updated accounts blindly, merge the sorted list
 	for hash := range dl.destructSet {
 		parent.destructSet[hash] = struct{}{}
@@ -517,15 +629,17 @@ func (dl *diffLayer) flatten() snapshot {
 	}
 	// Return the combo parent
 	return &diffLayer{
-		parent:      parent.parent,
-		origin:      parent.origin,
-		root:        dl.root,
-		destructSet: parent.destructSet,
-		accountData: parent.accountData,
-		storageData: parent.storageData,
-		storageList: make(map[common.Hash][]common.Hash),
-		diffed:      dl.diffed,
-		memory:      parent.memory + dl.memory,
+		parent:            parent.parent,
+		origin:            parent.origin,
+		diffLayerID:       dl.diffLayerID,
+		multiVersionCache: dl.multiVersionCache,
+		root:              dl.root,
+		destructSet:       parent.destructSet,
+		accountData:       parent.accountData,
+		storageData:       parent.storageData,
+		storageList:       make(map[common.Hash][]common.Hash),
+		diffed:            dl.diffed,
+		memory:            parent.memory + dl.memory,
 	}
 }
 

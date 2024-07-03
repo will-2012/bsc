@@ -357,7 +357,7 @@ type decoder struct {
 // - empty storage set: no slots are modified
 func (r *decoder) verify() error {
 	if len(r.accountIndexes)%accountIndexSize != 0 || len(r.accountIndexes) == 0 {
-		return fmt.Errorf("invalid account index, len: %d", len(r.accountIndexes))
+		return fmt.Errorf("invalid account index, account_len: %d, storage_len:%d", len(r.accountIndexes), len(r.storageIndexes))
 	}
 	if len(r.storageIndexes)%slotIndexSize != 0 {
 		return fmt.Errorf("invalid storage index, len: %d", len(r.storageIndexes))
@@ -506,6 +506,14 @@ func readHistory(freezer *rawdb.ResettableFreezer, id uint64) (*history, error) 
 		accountIndexes = rawdb.ReadStateAccountIndex(freezer, id)
 		storageIndexes = rawdb.ReadStateStorageIndex(freezer, id)
 	)
+	log.Info("Read history",
+		"state_id", id,
+		"block_id", m.block,
+		"root", m.root,
+		"len_account_data", len(accountData),
+		"len_storage_data", len(storageData),
+		"len_account_index", len(accountIndexes),
+		"len_storage_index", len(storageIndexes))
 	if err := dec.decode(accountData, storageData, accountIndexes, storageIndexes); err != nil {
 		return nil, err
 	}

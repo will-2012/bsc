@@ -443,6 +443,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 					diskRoot = bc.triedb.Head()
 					log.Info("Read disk root from mpt trie", "disk_root", diskRoot)
 				}
+				log.Info("Check whether to recover", "has_state", bc.HasState(diskRoot), "is_recoverable", recoverable)
 			}
 			if diskRoot != (common.Hash{}) {
 				log.Warn("Head state missing, repairing", "miss_block_id", head.Number, "hash", head.Hash(), "diskRoot", diskRoot)

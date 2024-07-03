@@ -238,7 +238,13 @@ func (db *Database) loadJournal(diskRoot common.Hash) (layer, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("Loaded layer journal", "diskroot", diskRoot, "diffhead", head.rootHash(), "elapsed", common.PrettyDuration(time.Since(start)))
+	log.Info("Loaded layer journal",
+		"diskroot", diskRoot,
+		"disk_state_id", base.stateID(),
+		"diffhead", head.rootHash(),
+		"diff_head_state_id", head.stateID(),
+		"diff_head_block_id", head.(*diffLayer).block,
+		"elapsed", common.PrettyDuration(time.Since(start)))
 	return head, nil
 }
 

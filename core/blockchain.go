@@ -955,6 +955,10 @@ func (bc *BlockChain) rewindPathHead(head *types.Header, root common.Hash) (*typ
 		// Check if the associated state is available or recoverable if
 		// the requested root has already been crossed.
 		if beyondRoot && (bc.HasState(head.Root) || bc.stateRecoverable(head.Root)) {
+			log.Info("break loop",
+				"block_id", head.Number.Uint64(),
+				"block_mpt_root", head.Root,
+				"is_beyond_root", beyondRoot)
 			break
 		}
 		// If pivot block is reached, return the genesis block as the
@@ -983,7 +987,10 @@ func (bc *BlockChain) rewindPathHead(head *types.Header, root common.Hash) (*typ
 	// Recover if the target state if it's not available yet.
 	if !bc.HasState(head.Root) {
 		if err := bc.triedb.Recover(head.Root); err != nil {
-			log.Crit("Failed to rollback state", "err", err)
+			log.Crit("Failed to rollback state",
+				"target_block_id", head.Number.Uint64(),
+				"target_block_mpt_root", head.Root,
+				"error", err)
 		}
 	}
 	log.Info("Rewound to block with state", "number", head.Number, "hash", head.Hash())
@@ -1033,6 +1040,8 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 		return 0, errChainStopped
 	}
 	defer bc.chainmu.Unlock()
+
+	log.Info("Start set head beyond root", "head_block_id", head, "root", root, "is_repair", repair)
 
 	var (
 		// Track the block number of the requested root hash

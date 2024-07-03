@@ -377,6 +377,7 @@ func (db *Database) Recover(root common.Hash, loader triestate.TrieLoader) error
 		dl    = db.tree.bottom()
 	)
 	for dl.rootHash() != root {
+		log.Info("Loop recover", "state_id", dl.stateID(), "root_hash", dl.rootHash(), "target_hash", root)
 		h, err := readHistory(db.freezer, dl.stateID())
 		if err != nil {
 			return err

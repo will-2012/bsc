@@ -430,6 +430,7 @@ func (db *Database) Recoverable(root common.Hash) bool {
 		if len(m.incomplete) > 0 {
 			return errors.New("incomplete state history")
 		}
+		log.Info("Check history", "parent", parent, "m_parent", m.parent, "m_current", m.root, "m_block", m.block, "m_imcomplete_len", len(m.incomplete))
 		parent = m.root
 		return nil
 	}) == nil

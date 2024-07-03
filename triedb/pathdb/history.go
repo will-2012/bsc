@@ -510,6 +510,7 @@ func readHistory(freezer *rawdb.ResettableFreezer, id uint64) (*history, error) 
 		"state_id", id,
 		"block_id", m.block,
 		"root", m.root,
+		"parent", m.parent,
 		"len_account_data", len(accountData),
 		"len_storage_data", len(storageData),
 		"len_account_index", len(accountIndexes),

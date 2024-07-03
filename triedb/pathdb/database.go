@@ -413,6 +413,7 @@ func (db *Database) Recoverable(root common.Hash) bool {
 	if id == nil {
 		return false
 	}
+	log.Info("Check recoverable", "root", root, "state_id", id)
 	// Recoverable state must below the disk layer. The recoverable
 	// state only refers the state that is currently not available,
 	// but can be restored by applying state history.

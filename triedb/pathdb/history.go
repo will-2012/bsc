@@ -558,8 +558,9 @@ func checkHistories(freezer *rawdb.ResettableFreezer, start, count uint64, check
 		if err != nil {
 			return err
 		}
-		for _, blob := range blobs {
+		for i, blob := range blobs {
 			var dec meta
+			log.Info("Check history", "state_id", start+uint64(i))
 			if err := dec.decode(blob); err != nil {
 				return err
 			}

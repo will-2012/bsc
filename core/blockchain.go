@@ -443,6 +443,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 					diskRoot = bc.triedb.Head()
 					log.Info("Read disk root from mpt trie", "disk_root", diskRoot)
 				}
+				bc.triedb.Head() // print log
 				log.Info("Check whether to recover", "has_state", bc.HasState(diskRoot), "is_recoverable", recoverable)
 			}
 			if diskRoot != (common.Hash{}) {
@@ -961,7 +962,9 @@ func (bc *BlockChain) rewindPathHead(head *types.Header, root common.Hash) (*typ
 			log.Info("break loop",
 				"block_id", head.Number.Uint64(),
 				"block_mpt_root", head.Root,
-				"is_beyond_root", beyondRoot)
+				"is_beyond_root", beyondRoot,
+				"has_state", bc.HasState(head.Root),
+				"is_recoverable", bc.stateRecoverable(head.Root))
 			break
 		}
 		// If pivot block is reached, return the genesis block as the

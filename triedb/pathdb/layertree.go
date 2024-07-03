@@ -297,7 +297,7 @@ func (tree *layerTree) front() common.Hash {
 	for {
 		children, ok := chain[parent]
 		if !ok {
-			log.Info("pathdb top difflayer", "root", parent)
+			log.Info("pathdb top difflayer", "root", parent, "block_id", tree.layers[parent].(*diffLayer).block)
 			return parent
 		}
 		if len(children) != 1 {

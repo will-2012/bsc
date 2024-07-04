@@ -535,6 +535,44 @@ func writeHistory(freezer *rawdb.ResettableFreezer, dl *diffLayer) error {
 	dataSize := common.StorageSize(len(accountData) + len(storageData))
 	indexSize := common.StorageSize(len(accountIndex) + len(storageIndex))
 
+	if len(accountIndex)%accountIndexSize != 0 || len(accountIndex) == 0 {
+		log.Crit("State account undolog is expected",
+			"diff_state_id", dl.id,
+			"diff_block_id", dl.block,
+			"diff_root", dl.root,
+			"undolog_meta_block_id", history.meta.block,
+			"undolog_meta_root", history.meta.root,
+			"undolog_meta_parent_root", history.meta.parent,
+			"undolog_account_index_len", len(accountIndex),
+			"undolog_storage_index_len", len(storageIndex),
+			"undolog_account_data_len", len(accountData),
+			"undolog_storage_data_len", len(storageData))
+	}
+	if len(storageIndex)%slotIndexSize != 0 {
+		log.Crit("State account undolog is expected",
+			"diff_state_id", dl.id,
+			"diff_block_id", dl.block,
+			"diff_root", dl.root,
+			"undolog_meta_block_id", history.meta.block,
+			"undolog_meta_root", history.meta.root,
+			"undolog_meta_parent_root", history.meta.parent,
+			"undolog_account_index_len", len(accountIndex),
+			"undolog_storage_index_len", len(storageIndex),
+			"undolog_account_data_len", len(accountData),
+			"undolog_storage_data_len", len(storageData))
+	}
+	log.Info("Stored state history state undolog",
+		"diff_state_id", dl.id,
+		"diff_block_id", dl.block,
+		"diff_root", dl.root,
+		"undolog_meta_block_id", history.meta.block,
+		"undolog_meta_root", history.meta.root,
+		"undolog_meta_parent_root", history.meta.parent,
+		"undolog_account_index_len", len(accountIndex),
+		"undolog_storage_index_len", len(storageIndex),
+		"undolog_account_data_len", len(accountData),
+		"undolog_storage_data_len", len(storageData))
+
 	// Write history data into five freezer table respectively.
 	rawdb.WriteStateHistory(freezer, dl.stateID(), history.meta.encode(), accountIndex, storageIndex, accountData, storageData)
 

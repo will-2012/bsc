@@ -560,13 +560,27 @@ func checkHistories(freezer *rawdb.ResettableFreezer, start, count uint64, check
 		}
 		for i, blob := range blobs {
 			var dec meta
-			log.Info("Check history", "state_id", start+uint64(i))
 			if err := dec.decode(blob); err != nil {
 				return err
 			}
 			if err := check(&dec); err != nil {
 				return err
 			}
+			// TODO: print index/data
+			accountData := rawdb.ReadStateAccountHistory(freezer, start+uint64(i))
+			storageData := rawdb.ReadStateStorageHistory(freezer, start+uint64(i))
+			accountIndexes := rawdb.ReadStateAccountIndex(freezer, start+uint64(i))
+			storageIndexes := rawdb.ReadStateStorageIndex(freezer, start+uint64(i))
+			log.Info("Check history data",
+				"current_state_id", start+uint64(i),
+				"block_id", dec.block,
+				"root", dec.root,
+				"parent", dec.parent,
+				"len_account_data", len(accountData),
+				"len_storage_data", len(storageData),
+				"len_account_index", len(accountIndexes),
+				"len_storage_index", len(storageIndexes))
+
 		}
 		count -= uint64(len(blobs))
 		start += uint64(len(blobs))

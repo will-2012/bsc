@@ -1441,8 +1441,15 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		if !w.isTTDReached(block.Header()) {
 			select {
 			case w.taskCh <- &task{receipts: receipts, state: env.state, block: block, createdAt: time.Now()}:
-				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
-					"txs", env.tcount, "blobs", env.blobs, "gas", block.GasUsed(), "fees", feesInEther, "elapsed", common.PrettyDuration(time.Since(start)))
+				log.Info("Commit new sealing work",
+					"number", block.Number(),
+					"origin_account_len", env.state.AccountsOriginNumber(),
+					"sealhash", w.engine.SealHash(block.Header()),
+					"txs", env.tcount,
+					"blobs", env.blobs,
+					"gas", block.GasUsed(),
+					"fees", feesInEther,
+					"elapsed", common.PrettyDuration(time.Since(start)))
 
 			case <-w.exitCh:
 				log.Info("Worker has exited")

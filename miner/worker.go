@@ -1424,7 +1424,9 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		feesInEther := new(big.Float).Quo(new(big.Float).SetInt(fees), big.NewFloat(params.Ether))
 		// Withdrawals are set to nil here, because this is only called in PoW.
 		finalizeStart := time.Now()
+		log.Info("Before finalize", "origin_account_len", env.state.AccountsOriginNumber())
 		block, receipts, err := w.engine.FinalizeAndAssemble(w.chain, types.CopyHeader(env.header), env.state, env.txs, nil, env.receipts, nil)
+		log.Info("After finalize", "block_id", block.NumberU64(), "origin_account_len", env.state.AccountsOriginNumber())
 		if err != nil {
 			return err
 		}

@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
@@ -230,6 +231,7 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 			err = r
 		}
 	}
+	log.Info("Validate state", "block_id", block.NumberU64(), "origin_account_len", statedb.AccountsOriginNumber())
 	return err
 }
 

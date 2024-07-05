@@ -548,7 +548,9 @@ func writeHistory(freezer *rawdb.ResettableFreezer, dl *diffLayer) error {
 			"undolog_account_data_len", len(accountData),
 			"undolog_storage_data_len", len(storageData),
 			"state_account_len", len(dl.states.Accounts),
-			"state_storage_len", len(dl.states.Storages))
+			"state_storage_len", len(dl.states.Storages),
+			"incomplete_len", len(dl.states.Incomplete),
+			"states_size", dl.states.Size())
 	}
 	if len(storageIndex)%slotIndexSize != 0 {
 		log.Crit("State account undolog is expected",

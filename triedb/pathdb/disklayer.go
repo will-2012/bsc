@@ -235,6 +235,7 @@ func (dl *diskLayer) commit(bottom *diffLayer, force bool) (*diskLayer, error) {
 		oldest   uint64
 	)
 	if dl.db.freezer != nil {
+		log.Info("Before commit", "disk_root", dl.root)
 		err := writeHistory(dl.db.freezer, bottom)
 		if err != nil {
 			return nil, err

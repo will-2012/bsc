@@ -536,7 +536,7 @@ func writeHistory(freezer *rawdb.ResettableFreezer, dl *diffLayer) error {
 	indexSize := common.StorageSize(len(accountIndex) + len(storageIndex))
 
 	if len(accountIndex)%accountIndexSize != 0 || len(accountIndex) == 0 {
-		log.Crit("State account undolog is expected",
+		log.Info("State account undolog is expected",
 			"diff_state_id", dl.id,
 			"diff_block_id", dl.block,
 			"diff_root", dl.root,
@@ -553,7 +553,7 @@ func writeHistory(freezer *rawdb.ResettableFreezer, dl *diffLayer) error {
 			"states_size", dl.states.Size())
 	}
 	if len(storageIndex)%slotIndexSize != 0 {
-		log.Crit("State account undolog is expected",
+		log.Info("State account undolog is expected",
 			"diff_state_id", dl.id,
 			"diff_block_id", dl.block,
 			"diff_root", dl.root,

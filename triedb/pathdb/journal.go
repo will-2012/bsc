@@ -444,7 +444,12 @@ func (db *Database) loadDiffLayer(parent layer, r *rlp.Stream, journalTypeForRea
 		}
 	}
 
-	log.Debug("Loaded diff layer journal", "root", root, "parent", parent.rootHash(), "id", parent.stateID()+1, "block", block)
+	log.Info("Loaded diff layer journal",
+		"root", root,
+		"parent", parent.rootHash(),
+		"id", parent.stateID()+1,
+		"block", block,
+		"origin_account_len", len(accounts))
 
 	return db.loadDiffLayer(newDiffLayer(parent, root, parent.stateID()+1, block, nodes, triestate.New(accounts, storages, incomplete)), r, journalTypeForReader)
 }
@@ -574,7 +579,7 @@ func (dl *diffLayer) journal(w io.Writer, journalType JournalType) error {
 		}
 	}
 
-	log.Info("Journaled pathdb diff layer", "root", dl.root, "parent", dl.parent.rootHash(), "id", dl.stateID(), "block", dl.block, "nodes", len(dl.nodes))
+	log.Info("Journaled pathdb diff layer", "root", dl.root, "parent", dl.parent.rootHash(), "id", dl.stateID(), "block", dl.block, "nodes", len(dl.nodes), "origin_account_len", len(dl.states.Accounts))
 	return nil
 }
 

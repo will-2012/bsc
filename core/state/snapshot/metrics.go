@@ -50,4 +50,15 @@ var (
 	snapStorageWriteCounter = metrics.NewRegisteredCounter("state/snapshot/generation/duration/storage/write", nil)
 	// snapStorageCleanCounter measures time spent on deleting storages
 	snapStorageCleanCounter = metrics.NewRegisteredCounter("state/snapshot/generation/duration/storage/clean", nil)
+
+	// multi version cache metrics
+	diffMultiVersionCacheHitMeter             = metrics.NewRegisteredMeter("pathdb/difflayer/multiversioncache/hit", nil)
+	diffMultiVersionCacheReadMeter            = metrics.NewRegisteredMeter("pathdb/difflayer/multiversioncache/read", nil)
+	diffMultiVersionCacheMissMeter            = metrics.NewRegisteredMeter("pathdb/difflayer/multiversioncache/miss", nil)
+	diffMultiVersionCacheBugMeter             = metrics.NewRegisteredMeter("pathdb/difflayer/multiversioncache/bug", nil)
+	diffMultiVersionCacheLengthGauge          = metrics.NewRegisteredGauge("pathdb/difflayer/multiversioncache/size", nil)
+	diffMultiVersionCacheQueryAccountTimer    = metrics.NewRegisteredTimer("pathdb/difflayer/queryaccount/time", nil)
+	diffMultiVersionCacheRawQueryAccountTimer = metrics.NewRegisteredTimer("pathdb/difflayer/rawqueryaccount/time", nil)
+	diffMultiVersionCacheQueryStorageTimer    = metrics.NewRegisteredTimer("pathdb/difflayer/querystorage/time", nil)
+	diffMultiVersionCacheRawQueryStorageTimer = metrics.NewRegisteredTimer("pathdb/difflayer/rawquerystorage/time", nil)
 )

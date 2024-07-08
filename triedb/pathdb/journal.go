@@ -238,7 +238,27 @@ func (db *Database) loadJournal(diskRoot common.Hash) (layer, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("Loaded layer journal", "diskroot", diskRoot, "diffhead", head.rootHash(), "elapsed", common.PrettyDuration(time.Since(start)))
+	diffly, ok := head.(*diffLayer)
+	if ok {
+		log.Info("Loaded layer journal",
+			"diskroot", diskRoot,
+			"disk_state_id", base.stateID(),
+			"disk_root", base.rootHash(),
+			"diffhead", head.rootHash(),
+			"diff_head_state_id", head.stateID(),
+			"diff_head_block_id", diffly.block,
+			"elapsed", common.PrettyDuration(time.Since(start)))
+	} else {
+		log.Info("Loaded layer journal",
+			"diskroot", diskRoot,
+			"disk_state_id", base.stateID(),
+			"disk_root", base.rootHash(),
+			"diffhead", head.rootHash(),
+			"diff_head_state_id", head.stateID(),
+			"no_difflayer", head == base,
+			"elapsed", common.PrettyDuration(time.Since(start)))
+	}
+
 	return head, nil
 }
 
@@ -424,7 +444,12 @@ func (db *Database) loadDiffLayer(parent layer, r *rlp.Stream, journalTypeForRea
 		}
 	}
 
-	log.Debug("Loaded diff layer journal", "root", root, "parent", parent.rootHash(), "id", parent.stateID()+1, "block", block)
+	log.Info("Loaded diff layer journal",
+		"root", root,
+		"parent", parent.rootHash(),
+		"id", parent.stateID()+1,
+		"block", block,
+		"origin_account_len", len(accounts))
 
 	return db.loadDiffLayer(newDiffLayer(parent, root, parent.stateID()+1, block, nodes, triestate.New(accounts, storages, incomplete)), r, journalTypeForReader)
 }
@@ -554,7 +579,7 @@ func (dl *diffLayer) journal(w io.Writer, journalType JournalType) error {
 		}
 	}
 
-	log.Info("Journaled pathdb diff layer", "root", dl.root, "parent", dl.parent.rootHash(), "id", dl.stateID(), "block", dl.block, "nodes", len(dl.nodes))
+	log.Info("Journaled pathdb diff layer", "root", dl.root, "parent", dl.parent.rootHash(), "id", dl.stateID(), "block", dl.block, "nodes", len(dl.nodes), "origin_account_len", len(dl.states.Accounts))
 	return nil
 }
 

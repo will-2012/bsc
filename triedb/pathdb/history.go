@@ -357,7 +357,7 @@ type decoder struct {
 // - empty storage set: no slots are modified
 func (r *decoder) verify() error {
 	if len(r.accountIndexes)%accountIndexSize != 0 || len(r.accountIndexes) == 0 {
-		return fmt.Errorf("invalid account index, len: %d", len(r.accountIndexes))
+		return fmt.Errorf("invalid account index, account_len: %d, storage_len:%d", len(r.accountIndexes), len(r.storageIndexes))
 	}
 	if len(r.storageIndexes)%slotIndexSize != 0 {
 		return fmt.Errorf("invalid storage index, len: %d", len(r.storageIndexes))
@@ -506,6 +506,15 @@ func readHistory(freezer *rawdb.ResettableFreezer, id uint64) (*history, error) 
 		accountIndexes = rawdb.ReadStateAccountIndex(freezer, id)
 		storageIndexes = rawdb.ReadStateStorageIndex(freezer, id)
 	)
+	log.Info("Read history",
+		"state_id", id,
+		"block_id", m.block,
+		"root", m.root,
+		"parent", m.parent,
+		"len_account_data", len(accountData),
+		"len_storage_data", len(storageData),
+		"len_account_index", len(accountIndexes),
+		"len_storage_index", len(storageIndexes))
 	if err := dec.decode(accountData, storageData, accountIndexes, storageIndexes); err != nil {
 		return nil, err
 	}
@@ -525,6 +534,48 @@ func writeHistory(freezer *rawdb.ResettableFreezer, dl *diffLayer) error {
 	accountData, storageData, accountIndex, storageIndex := history.encode()
 	dataSize := common.StorageSize(len(accountData) + len(storageData))
 	indexSize := common.StorageSize(len(accountIndex) + len(storageIndex))
+
+	if len(accountIndex)%accountIndexSize != 0 || len(accountIndex) == 0 {
+		log.Info("State account undolog is expected",
+			"diff_state_id", dl.id,
+			"diff_block_id", dl.block,
+			"diff_root", dl.root,
+			"undolog_meta_block_id", history.meta.block,
+			"undolog_meta_root", history.meta.root,
+			"undolog_meta_parent_root", history.meta.parent,
+			"undolog_account_index_len", len(accountIndex),
+			"undolog_storage_index_len", len(storageIndex),
+			"undolog_account_data_len", len(accountData),
+			"undolog_storage_data_len", len(storageData),
+			"state_account_len", len(dl.states.Accounts),
+			"state_storage_len", len(dl.states.Storages),
+			"incomplete_len", len(dl.states.Incomplete),
+			"states_size", dl.states.Size())
+	}
+	if len(storageIndex)%slotIndexSize != 0 {
+		log.Info("State account undolog is expected",
+			"diff_state_id", dl.id,
+			"diff_block_id", dl.block,
+			"diff_root", dl.root,
+			"undolog_meta_block_id", history.meta.block,
+			"undolog_meta_root", history.meta.root,
+			"undolog_meta_parent_root", history.meta.parent,
+			"undolog_account_index_len", len(accountIndex),
+			"undolog_storage_index_len", len(storageIndex),
+			"undolog_account_data_len", len(accountData),
+			"undolog_storage_data_len", len(storageData))
+	}
+	log.Info("Stored state history state undolog",
+		"diff_state_id", dl.id,
+		"diff_block_id", dl.block,
+		"diff_root", dl.root,
+		"undolog_meta_block_id", history.meta.block,
+		"undolog_meta_root", history.meta.root,
+		"undolog_meta_parent_root", history.meta.parent,
+		"undolog_account_index_len", len(accountIndex),
+		"undolog_storage_index_len", len(storageIndex),
+		"undolog_account_data_len", len(accountData),
+		"undolog_storage_data_len", len(storageData))
 
 	// Write history data into five freezer table respectively.
 	rawdb.WriteStateHistory(freezer, dl.stateID(), history.meta.encode(), accountIndex, storageIndex, accountData, storageData)
@@ -549,7 +600,7 @@ func checkHistories(freezer *rawdb.ResettableFreezer, start, count uint64, check
 		if err != nil {
 			return err
 		}
-		for _, blob := range blobs {
+		for i, blob := range blobs {
 			var dec meta
 			if err := dec.decode(blob); err != nil {
 				return err
@@ -557,6 +608,21 @@ func checkHistories(freezer *rawdb.ResettableFreezer, start, count uint64, check
 			if err := check(&dec); err != nil {
 				return err
 			}
+			// TODO: print index/data
+			accountData := rawdb.ReadStateAccountHistory(freezer, start+uint64(i))
+			storageData := rawdb.ReadStateStorageHistory(freezer, start+uint64(i))
+			accountIndexes := rawdb.ReadStateAccountIndex(freezer, start+uint64(i))
+			storageIndexes := rawdb.ReadStateStorageIndex(freezer, start+uint64(i))
+			log.Info("Check history data",
+				"current_state_id", start+uint64(i),
+				"block_id", dec.block,
+				"root", dec.root,
+				"parent", dec.parent,
+				"len_account_data", len(accountData),
+				"len_storage_data", len(storageData),
+				"len_account_index", len(accountIndexes),
+				"len_storage_index", len(storageIndexes))
+
 		}
 		count -= uint64(len(blobs))
 		start += uint64(len(blobs))

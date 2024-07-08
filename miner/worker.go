@@ -675,7 +675,11 @@ func (w *worker) resultLoop() {
 				continue
 			}
 			writeBlockTimer.UpdateSince(start)
-			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
+			log.Info("Successfully sealed new block",
+				"number", block.Number(),
+				"sealhash", sealhash,
+				"hash", hash,
+				"origin_account_len", task.state.AccountsOriginNumber(),
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 			w.mux.Post(core.NewMinedBlockEvent{Block: block})
 
@@ -1151,13 +1155,17 @@ func (w *worker) generateWork(params *generateParams) *newPayloadResult {
 	defer work.discard()
 
 	if !params.noTxs {
+		log.Info("Before fill txs", "origin_account_len", work.state.AccountsOriginNumber())
 		err := w.fillTransactions(nil, work, nil, nil)
+		log.Info("After fill txs", "origin_account_len", work.state.AccountsOriginNumber())
 		if errors.Is(err, errBlockInterruptedByTimeout) {
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(w.newpayloadTimeout))
 		}
 	}
 	fees := work.state.GetBalance(consensus.SystemAddress)
+	log.Info("Before finalize", "origin_account_len", work.state.AccountsOriginNumber())
 	block, _, err := w.engine.FinalizeAndAssemble(w.chain, work.header, work.state, work.txs, nil, work.receipts, params.withdrawals)
+	log.Info("After finalize", "origin_account_len", work.state.AccountsOriginNumber())
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
@@ -1441,8 +1449,15 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		if !w.isTTDReached(block.Header()) {
 			select {
 			case w.taskCh <- &task{receipts: receipts, state: env.state, block: block, createdAt: time.Now()}:
-				log.Info("Commit new sealing work", "number", block.Number(), "sealhash", w.engine.SealHash(block.Header()),
-					"txs", env.tcount, "blobs", env.blobs, "gas", block.GasUsed(), "fees", feesInEther, "elapsed", common.PrettyDuration(time.Since(start)))
+				log.Info("Commit new sealing work",
+					"number", block.Number(),
+					"origin_account_len", env.state.AccountsOriginNumber(),
+					"sealhash", w.engine.SealHash(block.Header()),
+					"txs", env.tcount,
+					"blobs", env.blobs,
+					"gas", block.GasUsed(),
+					"fees", feesInEther,
+					"elapsed", common.PrettyDuration(time.Since(start)))
 
 			case <-w.exitCh:
 				log.Info("Worker has exited")

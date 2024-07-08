@@ -122,6 +122,8 @@ func (tree *layerTree) add(root common.Hash, parentRoot common.Hash, block uint6
 	// Before adding layertree, update the hash cache.
 	l.cache.Add(l)
 
+	log.Info("Add difflayer", "root", l.rootHash(), "block_number", l.block, "new_state_len", len(l.nodes), "origin_account_len", len(l.states.Accounts))
+
 	tree.lock.Lock()
 	tree.layers[l.rootHash()] = l
 	tree.lock.Unlock()
@@ -297,7 +299,12 @@ func (tree *layerTree) front() common.Hash {
 	for {
 		children, ok := chain[parent]
 		if !ok {
-			log.Info("pathdb top difflayer", "root", parent)
+			parently, ok := tree.layers[parent].(*diffLayer)
+			if ok {
+				log.Info("pathdb top difflayer", "root", parent, "block_id", parently.block)
+			} else {
+				log.Info("pathdb top disklayer", "root", parent)
+			}
 			return parent
 		}
 		if len(children) != 1 {

@@ -175,6 +175,9 @@ type Tree struct {
 
 	// Test hooks
 	onFlatten func() // Hook invoked when the bottom most diff layers are flattened
+
+	descendants map[common.Hash]map[common.Hash]struct{}
+	lookup      *lookup
 }
 
 // New attempts to load an already existing snapshot from a persistent key-value
@@ -219,6 +222,12 @@ func New(config Config, diskdb ethdb.KeyValueStore, triedb *triedb.Database, roo
 		}
 		return nil, err // Bail out the error, don't rebuild automatically.
 	}
+
+	{
+		// TODO:
+		snap.lookup = newLookup(head)
+	}
+
 	// Existing snapshot loaded, seed all the layers
 	for head != nil {
 		snap.layers[head.Root()] = head

@@ -26,7 +26,7 @@ func collectDiffLayerAncestors(layer Snapshot) map[common.Hash]struct{} {
 // Lookup is an internal help structure to quickly identify
 type Lookup struct {
 	// todo: add lock?? or in layer tree lock??
-	state2LayerRoots map[string][]Snapshot
+	state2LayerRoots map[string][]Snapshot // think more about it
 	descendants      map[common.Hash]map[common.Hash]struct{}
 }
 
@@ -103,10 +103,6 @@ func (l *Lookup) addLayer(diff *diffLayer) {
 		lookupAddLayerTimer.UpdateSince(now)
 	}(time.Now())
 
-	// TODO(rjl493456442) theoretically the code below could be parallelized,
-	// but it will slow down the other parts of system (e.g., EVM execution)
-	// with unknown reasons.
-	//diffRoot := diff.Root()
 	for accountHash, _ := range diff.accountData {
 		l.state2LayerRoots[accountHash.String()] = append(l.state2LayerRoots[accountHash.String()], diff)
 	}
@@ -116,7 +112,33 @@ func (l *Lookup) addLayer(diff *diffLayer) {
 			l.state2LayerRoots[accountHash.String()+storageHash.String()] = append(l.state2LayerRoots[accountHash.String()+storageHash.String()], diff)
 		}
 	}
-	// TODO: update descendant mapping
+}
+
+func (l *Lookup) addDescendant(topDiffLayer Snapshot) {
+	var (
+		root    = topDiffLayer.Root()
+		current = topDiffLayer
+	)
+
+	for {
+		parent := current.Parent()
+		if parent == nil {
+			break // finished
+		}
+		if _, ok := parent.(*diskLayer); ok {
+			break // finished
+		}
+		subset, ok := l.descendants[parent.Root()]
+		if !ok {
+			panic("parent root is not exist in descendant mapping")
+		}
+		subset[root] = struct{}{}
+		current = parent
+	}
+}
+
+func (l *Lookup) removeDescendant(bottomDiffLayer Snapshot) {
+	delete(l.descendants, bottomDiffLayer.Root())
 }
 
 // removeLayer traverses all the dirty state within the given diff layer and
@@ -126,9 +148,6 @@ func (l *Lookup) removeLayer(diff *diffLayer) error {
 		lookupRemoveLayerTimer.UpdateSince(now)
 	}(time.Now())
 
-	// TODO(rjl493456442) theoretically the code below could be parallelized,
-	// but it will slow down the other parts of system (e.g., EVM execution)
-	// with unknown reasons.
 	diffRoot := diff.Root()
 	for accountHash, _ := range diff.accountData {
 		stateKey := accountHash.String()
@@ -190,7 +209,6 @@ func (l *Lookup) removeLayer(diff *diffLayer) error {
 		}
 	}
 
-	// TODO: update descendant mapping
 	return nil
 }
 

@@ -294,7 +294,7 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 	}
 
 	{ // fastpath
-		targetLayer := globaLookup.lookupAccount(hash, dl.root)
+		targetLayer := globalLookup.lookupAccount(hash, dl.root)
 		if targetLayer != nil {
 			return targetLayer.AccountRLP(hash)
 		}
@@ -374,7 +374,7 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 	}
 
 	{ // fastpath
-		targetLayer := globaLookup.lookupStorage(accountHash, storageHash, dl.root)
+		targetLayer := globalLookup.lookupStorage(accountHash, storageHash, dl.root)
 		if targetLayer != nil {
 			return targetLayer.Storage(accountHash, storageHash)
 		}

@@ -98,7 +98,7 @@ var (
 // global
 var (
 	// descendants map[common.Hash]map[common.Hash]struct{}
-	globaLookup *Lookup
+	globalLookup *Lookup
 )
 
 // Snapshot represents the functionality supported by a snapshot storage layer.
@@ -229,7 +229,7 @@ func New(config Config, diskdb ethdb.KeyValueStore, triedb *triedb.Database, roo
 
 	{
 		// TODO:
-		globaLookup = newLookup(head)
+		globalLookup = newLookup(head)
 	}
 
 	// Existing snapshot loaded, seed all the layers
@@ -390,6 +390,10 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	defer t.lock.Unlock()
 
 	t.layers[snap.root] = snap
+	{ // update lookup, which in the tree lock guard.
+		globalLookup.addLayer(snap)
+		globalLookup.addDescendant(snap)
+	}
 	log.Debug("Snapshot updated", "blockRoot", blockRoot)
 	return nil
 }
@@ -439,6 +443,8 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 
 		// Replace the entire snapshot tree with the flat base
 		t.layers = map[common.Hash]snapshot{base.root: base}
+		// TODO:
+
 		return nil
 	}
 	persisted := t.cap(diff, layers)
@@ -454,6 +460,8 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 	var remove func(root common.Hash)
 	remove = func(root common.Hash) {
 		delete(t.layers, root)
+		// TODO:
+
 		for _, child := range children[root] {
 			remove(child)
 		}
@@ -520,6 +528,7 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 		// write lock on grandparent.
 		flattened := parent.flatten().(*diffLayer)
 		t.layers[flattened.root] = flattened
+		// TODO:
 
 		// Invoke the hook if it's registered. Ugly hack.
 		if t.onFlatten != nil {

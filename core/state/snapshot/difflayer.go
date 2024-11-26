@@ -292,6 +292,13 @@ func (dl *diffLayer) AccountRLP(hash common.Hash) ([]byte, error) {
 		dl.lock.RUnlock()
 		return nil, ErrSnapshotStale
 	}
+
+	{ // fastpath
+		targetLayer := globalLookup.lookupAccount(hash, dl.root)
+		if targetLayer != nil {
+			return targetLayer.AccountRLP(hash)
+		}
+	}
 	// Check the bloom filter first whether there's even a point in reaching into
 	// all the maps in all the layers below
 	hit := dl.diffed.ContainsHash(accountBloomHash(hash))
@@ -365,6 +372,14 @@ func (dl *diffLayer) Storage(accountHash, storageHash common.Hash) ([]byte, erro
 		dl.lock.RUnlock()
 		return nil, ErrSnapshotStale
 	}
+
+	{ // fastpath
+		targetLayer := globalLookup.lookupStorage(accountHash, storageHash, dl.root)
+		if targetLayer != nil {
+			return targetLayer.Storage(accountHash, storageHash)
+		}
+	}
+
 	hit := dl.diffed.ContainsHash(storageBloomHash(accountHash, storageHash))
 	if !hit {
 		hit = dl.diffed.ContainsHash(destructBloomHash(accountHash))

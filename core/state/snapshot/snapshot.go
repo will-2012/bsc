@@ -95,6 +95,14 @@ var (
 	errSnapshotCycle = errors.New("snapshot cycle")
 )
 
+// global
+var (
+	// descendants map[common.Hash]map[common.Hash]struct{}
+	globalLookup *Lookup
+
+	// TODO: global layer tree maybe a choice
+)
+
 // Snapshot represents the functionality supported by a snapshot storage layer.
 type Snapshot interface {
 	// Root returns the root hash for which this snapshot was made.
@@ -175,6 +183,7 @@ type Tree struct {
 
 	// Test hooks
 	onFlatten func() // Hook invoked when the bottom most diff layers are flattened
+
 }
 
 // New attempts to load an already existing snapshot from a persistent key-value
@@ -219,6 +228,12 @@ func New(config Config, diskdb ethdb.KeyValueStore, triedb *triedb.Database, roo
 		}
 		return nil, err // Bail out the error, don't rebuild automatically.
 	}
+
+	{
+		// TODO:
+		globalLookup = newLookup(head)
+	}
+
 	// Existing snapshot loaded, seed all the layers
 	for head != nil {
 		snap.layers[head.Root()] = head
@@ -377,6 +392,10 @@ func (t *Tree) Update(blockRoot common.Hash, parentRoot common.Hash, destructs m
 	defer t.lock.Unlock()
 
 	t.layers[snap.root] = snap
+	{ // update lookup, which in the tree lock guard.
+		globalLookup.addLayer(snap)
+		globalLookup.addDescendant(snap)
+	}
 	log.Debug("Snapshot updated", "blockRoot", blockRoot)
 	return nil
 }
@@ -426,6 +445,8 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 
 		// Replace the entire snapshot tree with the flat base
 		t.layers = map[common.Hash]snapshot{base.root: base}
+		// TODO:
+
 		return nil
 	}
 	persisted := t.cap(diff, layers)
@@ -441,6 +462,8 @@ func (t *Tree) Cap(root common.Hash, layers int) error {
 	var remove func(root common.Hash)
 	remove = func(root common.Hash) {
 		delete(t.layers, root)
+		// TODO:
+
 		for _, child := range children[root] {
 			remove(child)
 		}
@@ -507,6 +530,7 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 		// write lock on grandparent.
 		flattened := parent.flatten().(*diffLayer)
 		t.layers[flattened.root] = flattened
+		// TODO:
 
 		// Invoke the hook if it's registered. Ugly hack.
 		if t.onFlatten != nil {

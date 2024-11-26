@@ -99,6 +99,8 @@ var (
 var (
 	// descendants map[common.Hash]map[common.Hash]struct{}
 	globalLookup *Lookup
+
+	// TODO: global layer tree maybe a choice
 )
 
 // Snapshot represents the functionality supported by a snapshot storage layer.

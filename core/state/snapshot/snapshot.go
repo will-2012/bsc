@@ -95,6 +95,12 @@ var (
 	errSnapshotCycle = errors.New("snapshot cycle")
 )
 
+// global
+var (
+	// descendants map[common.Hash]map[common.Hash]struct{}
+	globaLookup *Lookup
+)
+
 // Snapshot represents the functionality supported by a snapshot storage layer.
 type Snapshot interface {
 	// Root returns the root hash for which this snapshot was made.
@@ -176,8 +182,6 @@ type Tree struct {
 	// Test hooks
 	onFlatten func() // Hook invoked when the bottom most diff layers are flattened
 
-	descendants map[common.Hash]map[common.Hash]struct{}
-	lookup      *lookup
 }
 
 // New attempts to load an already existing snapshot from a persistent key-value
@@ -225,7 +229,7 @@ func New(config Config, diskdb ethdb.KeyValueStore, triedb *triedb.Database, roo
 
 	{
 		// TODO:
-		snap.lookup = newLookup(head)
+		globaLookup = newLookup(head)
 	}
 
 	// Existing snapshot loaded, seed all the layers

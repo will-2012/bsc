@@ -23,16 +23,16 @@ func collectDiffLayerAncestors(layer Snapshot) map[common.Hash]struct{} {
 	return set
 }
 
-// lookup is an internal help structure to quickly identify
-type lookup struct {
+// Lookup is an internal help structure to quickly identify
+type Lookup struct {
 	// todo: add lock?? or in layer tree lock??
-	state2LayerRoots map[string][]common.Hash
+	state2LayerRoots map[string][]Snapshot
 	descendants      map[common.Hash]map[common.Hash]struct{}
 }
 
 // newLookup initializes the lookup structure.
-func newLookup(head Snapshot) *lookup {
-	l := new(lookup)
+func newLookup(head Snapshot) *Lookup {
+	l := new(Lookup)
 
 	{ // setup state mapping
 		var (
@@ -43,7 +43,7 @@ func newLookup(head Snapshot) *lookup {
 			layers = append(layers, current)
 			current = current.Parent()
 		}
-		l.state2LayerRoots = make(map[string][]common.Hash)
+		l.state2LayerRoots = make(map[string][]Snapshot)
 
 		// Apply the layers from bottom to top
 		for i := len(layers) - 1; i >= 0; i-- {
@@ -87,7 +87,7 @@ func newLookup(head Snapshot) *lookup {
 	return l
 }
 
-func (l *lookup) isDescendant(state common.Hash, ancestor common.Hash) bool {
+func (l *Lookup) isDescendant(state common.Hash, ancestor common.Hash) bool {
 	subset := l.descendants[ancestor]
 	if subset == nil {
 		return false
@@ -98,7 +98,7 @@ func (l *lookup) isDescendant(state common.Hash, ancestor common.Hash) bool {
 
 // addLayer traverses all the dirty state within the given diff layer and links
 // them into the lookup set.
-func (l *lookup) addLayer(diff *diffLayer) {
+func (l *Lookup) addLayer(diff *diffLayer) {
 	defer func(now time.Time) {
 		lookupAddLayerTimer.UpdateSince(now)
 	}(time.Now())
@@ -106,14 +106,14 @@ func (l *lookup) addLayer(diff *diffLayer) {
 	// TODO(rjl493456442) theoretically the code below could be parallelized,
 	// but it will slow down the other parts of system (e.g., EVM execution)
 	// with unknown reasons.
-	diffRoot := diff.Root()
+	//diffRoot := diff.Root()
 	for accountHash, _ := range diff.accountData {
-		l.state2LayerRoots[accountHash.String()] = append(l.state2LayerRoots[accountHash.String()], diffRoot)
+		l.state2LayerRoots[accountHash.String()] = append(l.state2LayerRoots[accountHash.String()], diff)
 	}
 
 	for accountHash, slots := range diff.storageData {
 		for storageHash := range slots {
-			l.state2LayerRoots[accountHash.String()+storageHash.String()] = append(l.state2LayerRoots[accountHash.String()+storageHash.String()], diffRoot)
+			l.state2LayerRoots[accountHash.String()+storageHash.String()] = append(l.state2LayerRoots[accountHash.String()+storageHash.String()], diff)
 		}
 	}
 	// TODO: update descendant mapping
@@ -121,7 +121,7 @@ func (l *lookup) addLayer(diff *diffLayer) {
 
 // removeLayer traverses all the dirty state within the given diff layer and
 // unlinks them from the lookup set.
-func (l *lookup) removeLayer(diff *diffLayer) error {
+func (l *Lookup) removeLayer(diff *diffLayer) error {
 	defer func(now time.Time) {
 		lookupRemoveLayerTimer.UpdateSince(now)
 	}(time.Now())
@@ -139,7 +139,7 @@ func (l *lookup) removeLayer(diff *diffLayer) error {
 		}
 		var found bool
 		for j := 0; j < len(subset); j++ {
-			if subset[j] == diffRoot {
+			if subset[j].Root() == diffRoot {
 				if j == 0 {
 					subset = subset[1:] // TODO what if the underlying slice is held forever?
 				} else {
@@ -169,7 +169,7 @@ func (l *lookup) removeLayer(diff *diffLayer) error {
 			}
 			var found bool
 			for j := 0; j < len(subset); j++ {
-				if subset[j] == diffRoot {
+				if subset[j].Root() == diffRoot {
 					if j == 0 {
 						subset = subset[1:] // TODO what if the underlying slice is held forever?
 					} else {
@@ -194,34 +194,34 @@ func (l *lookup) removeLayer(diff *diffLayer) error {
 	return nil
 }
 
-func (l *lookup) lookupAccount(accountAddrHash common.Hash, head common.Hash) common.Hash {
+func (l *Lookup) lookupAccount(accountAddrHash common.Hash, head common.Hash) Snapshot {
 	list, exists := l.state2LayerRoots[accountAddrHash.String()]
 	if !exists {
-		return common.Hash{}
+		return nil
 	}
 
 	// Traverse the list in reverse order to find the first entry that either
 	// matches the specified head or is a descendant of it.
 	for i := len(list) - 1; i >= 0; i-- {
-		if list[i] == head || l.isDescendant(head, list[i]) {
+		if list[i].Root() == head || l.isDescendant(head, list[i].Root()) {
 			return list[i]
 		}
 	}
-	return common.Hash{}
+	return nil
 }
 
-func (l *lookup) lookupStorage(accountAddrHash common.Hash, slot common.Hash, head common.Hash) common.Hash {
+func (l *Lookup) lookupStorage(accountAddrHash common.Hash, slot common.Hash, head common.Hash) Snapshot {
 	list, exists := l.state2LayerRoots[accountAddrHash.String()+slot.String()]
 	if !exists {
-		return common.Hash{}
+		return nil
 	}
 
 	// Traverse the list in reverse order to find the first entry that either
 	// matches the specified head or is a descendant of it.
 	for i := len(list) - 1; i >= 0; i-- {
-		if list[i] == head || l.isDescendant(head, list[i]) {
+		if list[i].Root() == head || l.isDescendant(head, list[i].Root()) {
 			return list[i]
 		}
 	}
-	return common.Hash{}
+	return nil
 }

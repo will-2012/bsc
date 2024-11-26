@@ -7,35 +7,93 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
+func collectDiffLayerAncestors(layer Snapshot) map[common.Hash]struct{} {
+	set := make(map[common.Hash]struct{})
+	for {
+		parent := layer.Parent()
+		if parent == nil {
+			break // finished
+		}
+		if _, ok := parent.(*diskLayer); ok {
+			break // finished
+		}
+		set[parent.Root()] = struct{}{}
+		layer = parent
+	}
+	return set
+}
+
 // lookup is an internal help structure to quickly identify
 type lookup struct {
-	// todo: lock??
+	// todo: add lock?? or in layer tree lock??
 	state2LayerRoots map[string][]common.Hash
+	descendants      map[common.Hash]map[common.Hash]struct{}
 }
 
 // newLookup initializes the lookup structure.
 func newLookup(head Snapshot) *lookup {
-	var (
-		current = head
-		layers  []Snapshot
-	)
-	for current != nil {
-		layers = append(layers, current)
-		current = current.Parent()
-	}
 	l := new(lookup)
-	l.state2LayerRoots = make(map[string][]common.Hash)
 
-	// Apply the layers from bottom to top
-	for i := len(layers) - 1; i >= 0; i-- {
-		switch diff := layers[i].(type) {
-		case *diskLayer:
-			continue
-		case *diffLayer:
-			l.addLayer(diff)
+	{ // setup state mapping
+		var (
+			current = head
+			layers  []Snapshot
+		)
+		for current != nil {
+			layers = append(layers, current)
+			current = current.Parent()
+		}
+		l.state2LayerRoots = make(map[string][]common.Hash)
+
+		// Apply the layers from bottom to top
+		for i := len(layers) - 1; i >= 0; i-- {
+			switch diff := layers[i].(type) {
+			case *diskLayer:
+				continue
+			case *diffLayer:
+				l.addLayer(diff)
+			}
 		}
 	}
+
+	{ // setup descendant mapping
+		var (
+			current     = head
+			layers      = make(map[common.Hash]Snapshot)
+			descendants = make(map[common.Hash]map[common.Hash]struct{})
+		)
+		for {
+			hash := current.Root()
+			layers[hash] = current
+
+			// Traverse the ancestors (diff only) of the current layer and link them
+			for h := range collectDiffLayerAncestors(current) {
+				subset := descendants[h]
+				if subset == nil {
+					subset = make(map[common.Hash]struct{})
+					descendants[h] = subset
+				}
+				subset[hash] = struct{}{}
+			}
+			parent := current.Parent()
+			if parent == nil {
+				break
+			}
+			current = parent
+		}
+		l.descendants = descendants
+	}
+
 	return l
+}
+
+func (l *lookup) isDescendant(state common.Hash, ancestor common.Hash) bool {
+	subset := l.descendants[ancestor]
+	if subset == nil {
+		return false
+	}
+	_, ok := subset[state]
+	return ok
 }
 
 // addLayer traverses all the dirty state within the given diff layer and links
@@ -58,6 +116,7 @@ func (l *lookup) addLayer(diff *diffLayer) {
 			l.state2LayerRoots[accountHash.String()+storageHash.String()] = append(l.state2LayerRoots[accountHash.String()+storageHash.String()], diffRoot)
 		}
 	}
+	// TODO: update descendant mapping
 }
 
 // removeLayer traverses all the dirty state within the given diff layer and
@@ -130,6 +189,8 @@ func (l *lookup) removeLayer(diff *diffLayer) error {
 			}
 		}
 	}
+
+	// TODO: update descendant mapping
 	return nil
 }
 
@@ -142,8 +203,7 @@ func (l *lookup) lookupAccount(accountAddrHash common.Hash, head common.Hash) co
 	// Traverse the list in reverse order to find the first entry that either
 	// matches the specified head or is a descendant of it.
 	for i := len(list) - 1; i >= 0; i-- {
-		//if list[i] == head || l.descendant(head, list[i]) {
-		if list[i] == head {
+		if list[i] == head || l.isDescendant(head, list[i]) {
 			return list[i]
 		}
 	}
@@ -159,8 +219,7 @@ func (l *lookup) lookupStorage(accountAddrHash common.Hash, slot common.Hash, he
 	// Traverse the list in reverse order to find the first entry that either
 	// matches the specified head or is a descendant of it.
 	for i := len(list) - 1; i >= 0; i-- {
-		//if list[i] == head || l.descendant(head, list[i]) {
-		if list[i] == head {
+		if list[i] == head || l.isDescendant(head, list[i]) {
 			return list[i]
 		}
 	}

@@ -37,6 +37,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/ethdb/leveldb"
+	"github.com/ethereum/go-ethereum/ethdb/pebble"
 	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie"
@@ -91,6 +93,7 @@ Remove blockchain and state databases`,
 			dbHbss2PbssCmd,
 			dbTrieGetCmd,
 			dbTrieDeleteCmd,
+			levelDB2PebbleCmd,
 		},
 	}
 	dbInspectCmd = &cli.Command{
@@ -285,6 +288,13 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 		Usage: "Inspect the ancientStore information",
 		Description: `This commands will read current offset from kvdb, which is the current offset and starting BlockNumber
 of ancientStore, will also displays the reserved number of blocks in ancientStore `,
+	}
+	levelDB2PebbleCmd = &cli.Command{
+		Action:      levelDB2Pebble,
+		Name:        "level2pebble",
+		ArgsUsage:   "<src dir> <dst dir>",
+		Usage:       "Convert leveldb to pebble",
+		Description: `This commands iterates the src leveldb kv and write to dest pebble.`,
 	}
 )
 
@@ -1349,5 +1359,60 @@ func hbss2pbss(ctx *cli.Context) error {
 		log.Error("Prune Hash trie node in database failed", "error", err)
 		return err
 	}
+	return nil
+}
+
+func levelDB2Pebble(ctx *cli.Context) error {
+	if ctx.NArg() != 2 {
+		return fmt.Errorf("required arguments: %v", ctx.Command.ArgsUsage)
+	}
+
+	var (
+		srcDir          string
+		dstDir          string
+		err             error
+		counter         uint64
+		startTimestamp  time.Time
+		loggedTimestamp time.Time
+	)
+
+	srcDir = ctx.Args().Get(0)
+	dstDir = ctx.Args().Get(1)
+
+	srcLevelDB, err := leveldb.New(srcDir, 512, 4096, "", true)
+	if err != nil {
+		return fmt.Errorf("failed to open src leveldb: %v", err)
+	}
+
+	dstPebble, err := pebble.New(dstDir, 512, 4096, "", false, true)
+	if err != nil {
+		return fmt.Errorf("failed to open dst pebble: %v", err)
+	}
+
+	startTimestamp = time.Now()
+	writeBatch := dstPebble.NewBatch()
+	iter := srcLevelDB.NewIterator(nil, nil)
+	for iter.Next() {
+		err = iter.Error()
+		if err != nil {
+			return fmt.Errorf("failed to iterate src: %v", err)
+		}
+		writeBatch.Put(iter.Key(), iter.Value())
+		if writeBatch.ValueSize() > 4*1024*1024 {
+			writeBatch.Write()
+			writeBatch.Reset()
+		}
+		counter++
+
+		if (counter%1000000) == 0 || time.Since(loggedTimestamp) > 10*time.Second {
+			log.Info("Convert leveldb to pebble progress",
+				"counter_number", counter,
+				"elapsed_time", common.PrettyDuration(time.Since(startTimestamp)))
+			loggedTimestamp = time.Now()
+		}
+	}
+	writeBatch.Write()
+	srcLevelDB.Close()
+	dstPebble.Close()
 	return nil
 }

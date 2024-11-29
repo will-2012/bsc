@@ -186,6 +186,7 @@ func ReadStateHistoryMetaList(db ethdb.AncientReaderOp, start uint64, count uint
 func ReadStateAccountIndex(db ethdb.AncientReaderOp, id uint64) []byte {
 	blob, err := db.Ancient(stateHistoryAccountIndex, id-1)
 	if err != nil {
+		log.Error("Failed to read state account index", "state_id", id, "error", err)
 		return nil
 	}
 	return blob
@@ -197,6 +198,7 @@ func ReadStateAccountIndex(db ethdb.AncientReaderOp, id uint64) []byte {
 func ReadStateStorageIndex(db ethdb.AncientReaderOp, id uint64) []byte {
 	blob, err := db.Ancient(stateHistoryStorageIndex, id-1)
 	if err != nil {
+		log.Error("Failed to read state storage index", "state_id", id, "error", err)
 		return nil
 	}
 	return blob
@@ -208,6 +210,7 @@ func ReadStateStorageIndex(db ethdb.AncientReaderOp, id uint64) []byte {
 func ReadStateAccountHistory(db ethdb.AncientReaderOp, id uint64) []byte {
 	blob, err := db.Ancient(stateHistoryAccountData, id-1)
 	if err != nil {
+		log.Error("Failed to read state account history", "state_id", id, "error", err)
 		return nil
 	}
 	return blob
@@ -219,6 +222,7 @@ func ReadStateAccountHistory(db ethdb.AncientReaderOp, id uint64) []byte {
 func ReadStateStorageHistory(db ethdb.AncientReaderOp, id uint64) []byte {
 	blob, err := db.Ancient(stateHistoryStorageData, id-1)
 	if err != nil {
+		log.Error("Failed to read state storage history", "state_id", id, "error", err)
 		return nil
 	}
 	return blob

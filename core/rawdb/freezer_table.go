@@ -221,6 +221,7 @@ func (t *freezerTable) repair() error {
 		return err
 	}
 	if stat.Size() == 0 {
+		// todo: ??
 		if _, err := t.index.Write(buffer); err != nil {
 			return err
 		}
@@ -233,6 +234,8 @@ func (t *freezerTable) repair() error {
 		if err := truncateFreezerFile(t.index, stat.Size()-overflow); err != nil {
 			return err
 		} // New file can't trigger this path
+		// TODO: print log
+
 	}
 	// Retrieve the file sizes and prepare for truncation
 	if stat, err = t.index.Stat(); err != nil {

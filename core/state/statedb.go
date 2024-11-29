@@ -203,6 +203,10 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 	return sdb, nil
 }
 
+func (s *StateDB) AccountsOriginNumber() int {
+	return len(s.accountsOrigin)
+}
+
 func (s *StateDB) EnableWriteOnSharedStorage() {
 	s.writeOnSharedStorage = true
 }
@@ -1476,6 +1480,8 @@ func (s *StateDB) Commit(block uint64, postCommitFunc func() error) (common.Hash
 				if root != origin {
 					start := time.Now()
 					set := triestate.New(s.accountsOrigin, s.storagesOrigin, incomplete)
+					// todo:
+					log.Info("Start commit to trie", "block_id", block, "root", root, "parent_root", origin, "origin_account_len", len(set.Accounts))
 					if err := s.db.TrieDB().Update(root, origin, block, nodes, set); err != nil {
 						return err
 					}

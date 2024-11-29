@@ -432,15 +432,19 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			var diskRoot common.Hash
 			if bc.cacheConfig.SnapshotLimit > 0 {
 				diskRoot = rawdb.ReadSnapshotRoot(bc.db)
+				log.Info("Read disk root from snapshot", "disk_root", diskRoot)
 			}
 			if bc.triedb.Scheme() == rawdb.PathScheme && !bc.NoTries() {
 				recoverable, _ := bc.triedb.Recoverable(diskRoot)
 				if !bc.HasState(diskRoot) && !recoverable {
 					diskRoot = bc.triedb.Head()
+					log.Info("Read disk root from mpt trie", "disk_root", diskRoot)
 				}
+				bc.triedb.Head()
+				log.Info("Check whether to recover", "has_state", bc.HasState(diskRoot), "is_recoverable", recoverable)
 			}
 			if diskRoot != (common.Hash{}) {
-				log.Warn("Head state missing, repairing", "number", head.Number, "hash", head.Hash(), "diskRoot", diskRoot)
+				log.Warn("Head state missing, repairing", "miss_block_id", head.Number, "hash", head.Hash(), "diskRoot", diskRoot)
 
 				snapDisk, err := bc.setHeadBeyondRoot(head.Number.Uint64(), 0, diskRoot, true)
 				if err != nil {
@@ -920,6 +924,12 @@ func (bc *BlockChain) rewindPathHead(head *types.Header, root common.Hash) (*typ
 		// Check if the associated state is available or recoverable if
 		// the requested root has already been crossed.
 		if beyondRoot && (bc.HasState(head.Root) || bc.stateRecoverable(head.Root)) {
+			log.Info("break loop",
+				"block_id", head.Number.Uint64(),
+				"block_mpt_root", head.Root,
+				"is_beyond_root", beyondRoot,
+				"has_state", bc.HasState(head.Root),
+				"is_recoverable", bc.stateRecoverable(head.Root))
 			break
 		}
 		// If pivot block is reached, return the genesis block as the
@@ -948,7 +958,10 @@ func (bc *BlockChain) rewindPathHead(head *types.Header, root common.Hash) (*typ
 	// Recover if the target state if it's not available yet.
 	if !bc.HasState(head.Root) {
 		if err := bc.triedb.Recover(head.Root); err != nil {
-			log.Crit("Failed to rollback state", "err", err)
+			log.Crit("Failed to rollback state",
+				"target_block_id", head.Number.Uint64(),
+				"target_block_mpt_root", head.Root,
+				"error", err)
 		}
 	}
 	log.Info("Rewound to block with state", "number", head.Number, "hash", head.Hash())
@@ -998,6 +1011,8 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 		return 0, errChainStopped
 	}
 	defer bc.chainmu.Unlock()
+
+	log.Info("Start set head beyond root", "head_block_id", head, "root", root, "is_repair", repair)
 
 	var (
 		// Track the block number of the requested root hash

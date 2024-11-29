@@ -377,10 +377,16 @@ func (db *Database) Recover(root common.Hash, loader triestate.TrieLoader) error
 		dl    = db.tree.bottom()
 	)
 	for dl.rootHash() != root {
+		log.Info("Loop recover",
+			"state_id", dl.stateID(),
+			"root_hash", dl.rootHash(),
+			"target_hash", root)
 		h, err := readHistory(db.freezer, dl.stateID())
 		if err != nil {
 			return err
 		}
+		log.Info("Loop recover",
+			"block_id", h.meta.block)
 		dl, err = dl.revert(h, loader)
 		if err != nil {
 			return err
@@ -414,6 +420,7 @@ func (db *Database) Recoverable(root common.Hash) bool {
 	if *id >= dl.stateID() {
 		return false
 	}
+	log.Info("Check recoverable", "recover_root", root, "recover_state_id", *id, "disklayer_state_id", dl.stateID())
 	// Ensure the requested state is a canonical state and all state
 	// histories in range [id+1, disklayer.ID] are present and complete.
 	parent := root
@@ -424,6 +431,7 @@ func (db *Database) Recoverable(root common.Hash) bool {
 		if len(m.incomplete) > 0 {
 			return errors.New("incomplete state history")
 		}
+		log.Info("Check history", "parent", parent, "m_parent", m.parent, "m_current", m.root, "m_block", m.block, "m_incomplete_len", len(m.incomplete))
 		parent = m.root
 		return nil
 	}) == nil

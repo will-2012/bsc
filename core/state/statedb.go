@@ -182,15 +182,21 @@ func NewWithSharedPool(root common.Hash, db Database) (*StateDB, error) {
 
 // New creates a new state from a given trie.
 func New(root common.Hash, db Database) (*StateDB, error) {
+	reader, err := db.Reader(root)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithReader(root, db, reader)
+}
+
+// NewWithReader creates a new state for the specified state root. Unlike New,
+// this function accepts an additional Reader which is bound to the given root.
+func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
 	tr, err := db.OpenTrie(root)
 	if err != nil {
 		return nil, err
 	}
 	_, noTrie := tr.(*trie.EmptyTrie)
-	reader, err := db.Reader(root)
-	if err != nil {
-		return nil, err
-	}
 	sdb := &StateDB{
 		db:                   db,
 		trie:                 tr,
@@ -499,6 +505,12 @@ func (s *StateDB) Database() Database {
 	return s.db
 }
 
+// Reader retrieves the low level database reader supporting the
+// lower level operations.
+func (s *StateDB) Reader() Reader {
+	return s.reader
+}
+
 func (s *StateDB) HasSelfDestructed(addr common.Address) bool {
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -780,16 +792,12 @@ func (s *StateDB) CopyDoPrefetch() *StateDB {
 // otherwise, just do inactive copy trie prefetcher.
 func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 	// Copy all the basic fields, initialize the memory ones
-	reader, _ := s.db.Reader(s.originalRoot) // impossible to fail
 	state := &StateDB{
-		db:   s.db,
-		trie: mustCopyTrie(s.trie),
-		// noTrie:s.noTrie,
-		reader: reader,
-		// expectedRoot:         s.expectedRoot,
-		originalRoot: s.originalRoot,
-		// fullProcessed:        s.fullProcessed,
-		stateObjects:         make(map[common.Address]*stateObject, len(s.journal.dirties)),
+		db:                   s.db,
+		trie:                 mustCopyTrie(s.trie),
+		reader:               s.reader,
+		originalRoot:         s.originalRoot,
+		stateObjects:         make(map[common.Address]*stateObject, len(s.stateObjects)),
 		stateObjectsDestruct: make(map[common.Address]*stateObject, len(s.stateObjectsDestruct)),
 		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
 		dbErr:                s.dbErr,

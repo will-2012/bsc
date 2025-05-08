@@ -103,7 +103,11 @@ var (
 	blockReorgAddMeter  = metrics.NewRegisteredMeter("chain/reorg/add", nil)
 	blockReorgDropMeter = metrics.NewRegisteredMeter("chain/reorg/drop", nil)
 
-	blockRecvTimeDiffGauge = metrics.NewRegisteredGauge("chain/block/recvtimediff", nil)
+	blockRecvTimeDiffGauge       = metrics.NewRegisteredGauge("chain/block/recvtimediff", nil)
+	blockPrefetchExecuteTimer    = metrics.NewRegisteredResettingTimer("chain/prefetch/executes", nil)
+	blockPrefetchInterruptMeter  = metrics.NewRegisteredMeter("chain/prefetch/interrupts", nil)
+	blockPrefetchTxsInvalidMeter = metrics.NewRegisteredMeter("chain/prefetch/txs/invalid", nil)
+	blockPrefetchTxsValidMeter   = metrics.NewRegisteredMeter("chain/prefetch/txs/valid", nil)
 
 	errInsertionInterrupted = errors.New("insertion is interrupted")
 	errChainStopped         = errors.New("blockchain is stopped")
@@ -2188,7 +2192,6 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		bc.reportBlock(block, nil, err)
 		return nil, it.index, err
 	}
-
 	// Track the singleton witness from this chain insertion (if any)
 	var witness *stateless.Witness
 
@@ -2245,53 +2248,16 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 			continue
 		}
 		// Retrieve the parent block and it's state to execute on top
-		start := time.Now()
 		parent := it.previous()
 		if parent == nil {
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
 
-		statedb, err := state.NewWithSharedPool(parent.Root, bc.statedb)
-		if err != nil {
-			return nil, it.index, err
-		}
 		bc.updateHighestVerifiedHeader(block.Header())
 
-		// If we are past Byzantium, enable prefetching to pull in trie node paths
-		// while processing transactions. Before Byzantium the prefetcher is mostly
-		// useless due to the intermediate root hashing after each transaction.
-		if bc.chainConfig.IsByzantium(block.Number()) {
-			// Generate witnesses either if we're self-testing, or if it's the
-			// only block being inserted. A bit crude, but witnesses are huge,
-			// so we refuse to make an entire chain of them.
-			if bc.vmConfig.StatelessSelfValidation || (makeWitness && len(chain) == 1) {
-				witness, err = stateless.NewWitness(block.Header(), bc)
-				if err != nil {
-					return nil, it.index, err
-				}
-			}
-			statedb.StartPrefetcher("chain", witness)
-		}
-
-		interruptCh := make(chan struct{})
-		// For diff sync, it may fallback to full sync, so we still do prefetch
-		if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
-			// do Prefetch in a separate goroutine to avoid blocking the critical path
-			// 1.do state prefetch for snapshot cache
-			throwaway := statedb.CopyDoPrefetch()
-			// Disable tracing for prefetcher executions.
-			vmCfg := bc.vmConfig
-			vmCfg.Tracer = nil
-			go bc.prefetcher.Prefetch(block, throwaway, &vmCfg, interruptCh)
-
-			// 2.do trie prefetch for MPT trie node cache
-			// it is for the big state trie tree, prefetch based on transaction's From/To address.
-			// trie prefetcher is thread safe now, ok to prefetch in a separate routine
-			go throwaway.TriePrefetchInAdvance(block, signer)
-		}
-
 		// The traced section of block import.
-		res, err := bc.processBlock(block, statedb, start, setHead, interruptCh)
+		start := time.Now()
+		res, err := bc.processBlock(parent.Root, block, setHead, makeWitness && len(chain) == 1)
 		if err != nil {
 			return nil, it.index, err
 		}
@@ -2300,6 +2266,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		// Report the import stats before returning the various results
 		stats.processed++
 		stats.usedGas += res.usedGas
+		witness = res.witness
 
 		var snapDiffItems, snapBufItems common.StorageSize
 		if bc.snaps != nil {
@@ -2383,12 +2350,70 @@ type blockProcessingResult struct {
 	usedGas  uint64
 	procTime time.Duration
 	status   WriteStatus
+	witness  *stateless.Witness
 }
 
 // processBlock executes and validates the given block. If there was no error
 // it writes the block and associated state to database.
-func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, start time.Time, setHead bool, interruptCh chan struct{}) (_ *blockProcessingResult, blockEndErr error) {
-	statedb.SetExpectedStateRoot(block.Root())
+func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, setHead bool, makeWitness bool) (_ *blockProcessingResult, blockEndErr error) {
+	var (
+		err         error
+		startTime   = time.Now()
+		statedb     *state.StateDB
+		interruptCh = make(chan struct{})
+	)
+	defer close(interruptCh) // terminate the prefetch at the end
+
+	if bc.cacheConfig.TrieCleanNoPrefetch {
+		statedb, err = state.New(parentRoot, bc.statedb)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// If prefetching is enabled, run that against the current state to pre-cache
+		// transactions and probabilistically some of the account/storage trie nodes.
+		//
+		// Note: the main processor and prefetcher share the same reader with a local
+		// cache for mitigating the overhead of state access.
+		reader, err := bc.statedb.ReaderWithCache(parentRoot)
+		if err != nil {
+			return nil, err
+		}
+		throwaway, err := state.NewWithReader(parentRoot, bc.statedb, reader)
+		if err != nil {
+			return nil, err
+		}
+		statedb, err = state.NewWithReader(parentRoot, bc.statedb, reader)
+		if err != nil {
+			return nil, err
+		}
+		go func(start time.Time, throwaway *state.StateDB, block *types.Block) {
+			// Disable tracing for prefetcher executions.
+			vmCfg := bc.vmConfig
+			vmCfg.Tracer = nil
+			bc.prefetcher.Prefetch(block, throwaway, &vmCfg, interruptCh)
+
+			blockPrefetchExecuteTimer.Update(time.Since(start))
+		}(time.Now(), throwaway, block)
+	}
+
+	// If we are past Byzantium, enable prefetching to pull in trie node paths
+	// while processing transactions. Before Byzantium the prefetcher is mostly
+	// useless due to the intermediate root hashing after each transaction.
+	var witness *stateless.Witness
+	if bc.chainConfig.IsByzantium(block.Number()) {
+		// Generate witnesses either if we're self-testing, or if it's the
+		// only block being inserted. A bit crude, but witnesses are huge,
+		// so we refuse to make an entire chain of them.
+		if bc.vmConfig.StatelessSelfValidation || makeWitness {
+			witness, err = stateless.NewWitness(block.Header(), bc)
+			if err != nil {
+				return nil, err
+			}
+		}
+		statedb.StartPrefetcher("chain", witness)
+		defer statedb.StopPrefetcher()
+	}
 
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {
 		td := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
@@ -2454,7 +2479,7 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		}
 	}
 	xvtime := time.Since(xvstart)
-	proctime := time.Since(start) // processing + validation + cross validation
+	proctime := time.Since(startTime) // processing + validation + cross validation
 
 	// Update the metrics touched during block processing and validation
 	if metrics.EnabledExpensive() {
@@ -2498,11 +2523,15 @@ func (bc *BlockChain) processBlock(block *types.Block, statedb *state.StateDB, s
 		triedbCommitTimer.Update(statedb.TrieDBCommits)     // Trie database commits are complete, we can mark them
 	}
 	blockWriteTimer.Update(time.Since(wstart) - max(statedb.AccountCommits, statedb.StorageCommits) /* concurrent */ - statedb.SnapshotCommits - statedb.TrieDBCommits)
-	blockInsertTimer.UpdateSince(start)
+	blockInsertTimer.UpdateSince(startTime)
 	blockInsertTxSizeGauge.Update(int64(len(block.Transactions())))
 	blockInsertGasUsedGauge.Update(int64(block.GasUsed()))
-
-	return &blockProcessingResult{usedGas: res.GasUsed, procTime: proctime, status: status}, nil
+	return &blockProcessingResult{
+		usedGas:  res.GasUsed,
+		procTime: proctime,
+		status:   status,
+		witness:  witness,
+	}, nil
 }
 
 // insertSideChain is called when an import batch hits upon a pruned ancestor

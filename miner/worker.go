@@ -720,6 +720,7 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	if err != nil {
 		return nil, err
 	}
+	// todo: trie prefetcher
 	if witness {
 		bundle, err := stateless.NewWitness(header, w.chain)
 		if err != nil {
@@ -853,6 +854,7 @@ func (w *worker) commitTransactions(env *environment, plainTxs, blobTxs *transac
 	tx := txsPrefetch.PeekWithUnwrap()
 	if tx != nil {
 		txCurr := &tx
+		// todo:
 		w.prefetcher.PrefetchMining(txsPrefetch, env.header, env.gasPool.Gas(), env.state.CopyDoPrefetch(), *w.chain.GetVMConfig(), stopPrefetchCh, txCurr)
 	}
 
@@ -1526,6 +1528,7 @@ func (w *worker) commit(env *environment, interval func(), update bool, start ti
 		if env.header.EmptyWithdrawalsHash() {
 			body.Withdrawals = make([]*types.Withdrawal, 0)
 		}
+		// todo:
 		block, receipts, err := w.engine.FinalizeAndAssemble(w.chain, types.CopyHeader(env.header), env.state, &body, env.receipts, nil)
 		if err != nil {
 			return err

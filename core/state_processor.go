@@ -33,8 +33,11 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+var processTxTimer = metrics.NewRegisteredTimer("process/tx/time", nil)
 
 const largeTxGasLimit = 10000000 // 10M Gas, to measure the execution time of large tx
 
@@ -127,6 +130,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	systemTxs := make([]*types.Transaction, 0, 2)
 
 	for i, tx := range block.Transactions() {
+		start := time.Now()
 		if isPoSA {
 			if isSystemTx, err := posa.IsSystemTransaction(tx, block.Header()); err != nil {
 				bloomProcessors.Close()
@@ -158,6 +162,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		commonTxs = append(commonTxs, tx)
 		receipts = append(receipts, receipt)
+		if metrics.EnabledExpensive() {
+			processTxTimer.UpdateSince(start)
+		}
 	}
 	bloomProcessors.Close()
 

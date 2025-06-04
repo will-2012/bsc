@@ -40,6 +40,9 @@ import (
 var processTxTimer = metrics.NewRegisteredTimer("process/tx/time", nil)
 var processInnerTxTimer = metrics.NewRegisteredTimer("process/inner/tx/time", nil)
 
+var applyMsgTimer = metrics.NewRegisteredTimer("apply/msg/time", nil)
+var finaliseMsgTimer = metrics.NewRegisteredTimer("finalise/msg/time", nil)
+
 const largeTxGasLimit = 10000000 // 10M Gas, to measure the execution time of large tx
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -234,14 +237,22 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		}
 	}
 	// Apply the transaction to the current state (included in the env).
+	startApplyMsg := time.Now()
 	result, err = ApplyMessage(evm, msg, gp)
 	if err != nil {
 		return nil, err
 	}
+	if metrics.EnabledExpensive() {
+		applyMsgTimer.UpdateSince(startApplyMsg)
+	}
 	// Update the state with pending changes.
 	var root []byte
 	if evm.ChainConfig().IsByzantium(blockNumber) {
+		startFinalise := time.Now()
 		evm.StateDB.Finalise(true)
+		if metrics.EnabledExpensive() {
+			finaliseMsgTimer.UpdateSince(startFinalise)
+		}
 	} else {
 		root = statedb.IntermediateRoot(evm.ChainConfig().IsEIP158(blockNumber)).Bytes()
 	}

@@ -38,6 +38,7 @@ import (
 )
 
 var processTxTimer = metrics.NewRegisteredTimer("process/tx/time", nil)
+var processInnerTxTimer = metrics.NewRegisteredTimer("process/inner/tx/time", nil)
 
 const largeTxGasLimit = 10000000 // 10M Gas, to measure the execution time of large tx
 
@@ -155,10 +156,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		statedb.SetTxContext(tx.Hash(), i)
 
+		startInnerTx := time.Now()
 		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, tx, usedGas, evm, bloomProcessors)
 		if err != nil {
 			bloomProcessors.Close()
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		if metrics.EnabledExpensive() {
+			processInnerTxTimer.UpdateSince(startInnerTx)
 		}
 		commonTxs = append(commonTxs, tx)
 		receipts = append(receipts, receipt)

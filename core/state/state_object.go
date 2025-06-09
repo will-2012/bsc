@@ -232,7 +232,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	if metrics.EnabledExpensive() {
 		start = time.Now()
 	}
-	value, err := s.db.reader.Storage(s.address, key)
+	value, err := s.db.reader.Storage(s.address, key, s.db.EnablePerf)
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}

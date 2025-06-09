@@ -516,7 +516,7 @@ func ServiceGetTrieNodesQuery(chain *core.BlockChain, req *GetTrieNodesPacket, s
 				}
 				stRoot = account.Root
 			} else {
-				account, err := snap.Account(common.BytesToHash(pathset[0]))
+				account, err := snap.Account(common.BytesToHash(pathset[0]), false)
 				loads++ // always account database reads, even for failures
 				if err != nil || account == nil {
 					break

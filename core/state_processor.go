@@ -80,6 +80,11 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		gp          = new(GasPool).AddGas(block.GasLimit())
 	)
 
+	statedb.EnablePerf = true
+	defer func() {
+		statedb.EnablePerf = false
+	}()
+
 	txNum := len(block.Transactions())
 	if !debug.Handler.EnableTraceCapture(block.Header().Number.Uint64(), "") {
 		debug.Handler.EnableTraceBigBlock(block.Header().Number.Uint64(), txNum, "")

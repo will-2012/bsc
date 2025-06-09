@@ -48,7 +48,7 @@ type StateReader interface {
 	// Note:
 	// - the returned account object is safe to modify
 	// - no error will be returned if the requested account is not found in database
-	Account(hash common.Hash) (*types.SlimAccount, error)
+	Account(hash common.Hash, enablePerf bool) (*types.SlimAccount, error)
 
 	// Storage directly retrieves the storage data associated with a particular hash,
 	// within a particular account. An error will be returned if the read operation
@@ -57,7 +57,7 @@ type StateReader interface {
 	// Note:
 	// - the returned storage data is not a copy, please don't modify it
 	// - no error will be returned if the requested slot is not found in database
-	Storage(accountHash, storageHash common.Hash) ([]byte, error)
+	Storage(accountHash, storageHash common.Hash, enablePerf bool) ([]byte, error)
 }
 
 // StateDatabase wraps the methods of a backing state store.

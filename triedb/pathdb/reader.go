@@ -104,7 +104,7 @@ func (r *reader) AccountRLP(hash common.Hash) ([]byte, error) {
 // Note:
 // - the returned account object is safe to modify
 // - no error will be returned if the requested account is not found in database
-func (r *reader) Account(hash common.Hash) (*types.SlimAccount, error) {
+func (r *reader) Account(hash common.Hash, enablePerf bool) (*types.SlimAccount, error) {
 	blob, err := r.layer.account(hash, 0)
 	if err != nil {
 		return nil, err
@@ -126,7 +126,7 @@ func (r *reader) Account(hash common.Hash) (*types.SlimAccount, error) {
 // Note:
 // - the returned storage data is not a copy, please don't modify it
 // - no error will be returned if the requested slot is not found in database
-func (r *reader) Storage(accountHash, storageHash common.Hash) ([]byte, error) {
+func (r *reader) Storage(accountHash, storageHash common.Hash, enablePerf bool) ([]byte, error) {
 	return r.layer.storage(accountHash, storageHash, 0)
 }
 

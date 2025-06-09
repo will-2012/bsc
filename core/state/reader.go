@@ -57,7 +57,7 @@ type StateReader interface {
 	// - Returns a nil account if it does not exist
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned account is safe to modify after the call
-	Account(addr common.Address) (*types.StateAccount, error)
+	Account(addr common.Address, enablePerf bool) (*types.StateAccount, error)
 
 	// Storage retrieves the storage slot associated with a particular account
 	// address and slot key.
@@ -65,7 +65,7 @@ type StateReader interface {
 	// - Returns an empty slot if it does not exist
 	// - Returns an error only if an unexpected issue occurs
 	// - The returned storage slot is safe to modify after the call
-	Storage(addr common.Address, slot common.Hash) (common.Hash, error)
+	Storage(addr common.Address, slot common.Hash, enablePerf bool) (common.Hash, error)
 }
 
 // Reader defines the interface for accessing accounts, storage slots and contract
@@ -143,8 +143,8 @@ func newFlatReader(reader database.StateReader) *flatReader {
 // the requested account is not yet covered by the snapshot.
 //
 // The returned account might be nil if it's not existent.
-func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
-	account, err := r.reader.Account(crypto.HashData(r.buff, addr.Bytes()))
+func (r *flatReader) Account(addr common.Address, enablePerf bool) (*types.StateAccount, error) {
+	account, err := r.reader.Account(crypto.HashData(r.buff, addr.Bytes()), enablePerf)
 	if err != nil {
 		return nil, err
 	}
@@ -173,10 +173,10 @@ func (r *flatReader) Account(addr common.Address) (*types.StateAccount, error) {
 // the requested storage slot is not yet covered by the snapshot.
 //
 // The returned storage slot might be empty if it's not existent.
-func (r *flatReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
+func (r *flatReader) Storage(addr common.Address, key common.Hash, enablePerf bool) (common.Hash, error) {
 	addrHash := crypto.HashData(r.buff, addr.Bytes())
 	slotHash := crypto.HashData(r.buff, key.Bytes())
-	ret, err := r.reader.Storage(addrHash, slotHash)
+	ret, err := r.reader.Storage(addrHash, slotHash, enablePerf)
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -234,7 +234,7 @@ func newTrieReader(root common.Hash, db *triedb.Database, cache *utils.PointCach
 //
 // An error will be returned if the trie state is corrupted. An nil account
 // will be returned if it's not existent in the trie.
-func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
+func (r *trieReader) Account(addr common.Address, enablePerf bool) (*types.StateAccount, error) {
 	account, err := r.mainTrie.GetAccount(addr)
 	if err != nil {
 		return nil, err
@@ -252,7 +252,7 @@ func (r *trieReader) Account(addr common.Address) (*types.StateAccount, error) {
 //
 // An error will be returned if the trie state is corrupted. An empty storage
 // slot will be returned if it's not existent in the trie.
-func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash, error) {
+func (r *trieReader) Storage(addr common.Address, key common.Hash, enablePerf bool) (common.Hash, error) {
 	var (
 		tr    Trie
 		found bool
@@ -268,7 +268,7 @@ func (r *trieReader) Storage(addr common.Address, key common.Hash) (common.Hash,
 			// The storage slot is accessed without account caching. It's unexpected
 			// behavior but try to resolve the account first anyway.
 			if !ok {
-				_, err := r.Account(addr)
+				_, err := r.Account(addr, enablePerf)
 				if err != nil {
 					return common.Hash{}, err
 				}
@@ -315,10 +315,10 @@ func newMultiStateReader(readers ...StateReader) (*multiStateReader, error) {
 // - Returns a nil account if it does not exist
 // - Returns an error only if an unexpected issue occurs
 // - The returned account is safe to modify after the call
-func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, error) {
+func (r *multiStateReader) Account(addr common.Address, enablePerf bool) (*types.StateAccount, error) {
 	var errs []error
 	for _, reader := range r.readers {
-		acct, err := reader.Account(addr)
+		acct, err := reader.Account(addr, enablePerf)
 		if err == nil {
 			return acct, nil
 		}
@@ -333,10 +333,10 @@ func (r *multiStateReader) Account(addr common.Address) (*types.StateAccount, er
 // - Returns an empty slot if it does not exist
 // - Returns an error only if an unexpected issue occurs
 // - The returned storage slot is safe to modify after the call
-func (r *multiStateReader) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+func (r *multiStateReader) Storage(addr common.Address, slot common.Hash, enablePerf bool) (common.Hash, error) {
 	var errs []error
 	for _, reader := range r.readers {
-		slot, err := reader.Storage(addr, slot)
+		slot, err := reader.Storage(addr, slot, enablePerf)
 		if err == nil {
 			return slot, nil
 		}

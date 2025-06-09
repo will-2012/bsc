@@ -50,4 +50,7 @@ var (
 	snapStorageWriteCounter = metrics.NewRegisteredCounter("state/snapshot/generation/duration/storage/write", nil)
 	// snapStorageCleanCounter measures time spent on deleting storages
 	snapStorageCleanCounter = metrics.NewRegisteredCounter("state/snapshot/generation/duration/storage/clean", nil)
+
+	perfAccountTimer = metrics.NewRegisteredTimer("perf/account/time", nil)
+	perfSlotTimer    = metrics.NewRegisteredTimer("perf/slot/time", nil)
 )

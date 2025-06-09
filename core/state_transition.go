@@ -39,6 +39,7 @@ import (
 var perfExecute1Timer = metrics.NewRegisteredTimer("perf/execute1/time", nil)
 var perfExecute2Timer = metrics.NewRegisteredTimer("perf/execute2/time", nil)
 var perfExecute3Timer = metrics.NewRegisteredTimer("perf/execute3/time", nil)
+var perfExecute31Timer = metrics.NewRegisteredTimer("perf/execute31/time", nil)
 var perfExecute4Timer = metrics.NewRegisteredTimer("perf/execute4/time", nil)
 
 // ExecutionResult includes all output after executing given evm
@@ -540,7 +541,11 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		}
 
 		// Execute the transaction's call.
+		start31 := time.Now()
 		ret, st.gasRemaining, vmerr = st.evm.Call(sender, st.to(), msg.Data, st.gasRemaining, value)
+		if st.evm.NeedPerf() {
+			perfExecute31Timer.UpdateSince(start31)
+		}
 	}
 	if st.evm.NeedPerf() {
 		perfExecute3Timer.UpdateSince(start3)

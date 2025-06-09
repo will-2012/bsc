@@ -717,6 +717,9 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 
 	start := time.Now()
 	acct, err := s.reader.Account(addr, s.EnablePerf)
+	if s.EnablePerf {
+		perfOutAccountTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 		return nil

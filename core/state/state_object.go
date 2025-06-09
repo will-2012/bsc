@@ -233,6 +233,9 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		start = time.Now()
 	}
 	value, err := s.db.reader.Storage(s.address, key, s.db.EnablePerf)
+	if s.db.EnablePerf {
+		perfOutSlotTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}

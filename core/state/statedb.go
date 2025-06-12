@@ -47,6 +47,7 @@ import (
 
 var perfStateDBRefundTime = metrics.NewRegisteredTimer("perf/statedb/refund/time", nil)
 var perfStateDBExistTime = metrics.NewRegisteredTimer("perf/statedb/exist/time", nil)
+var perfStateDBEmptyTime = metrics.NewRegisteredTimer("perf/statedb/empty/time", nil)
 var perfStateDBGetBalanceTime = metrics.NewRegisteredTimer("perf/statedb/getbalance/time", nil)
 var perfStateDBGetNonceTime = metrics.NewRegisteredTimer("perf/statedb/getnonce/time", nil)
 var perfStateDBGetStorageRootTime = metrics.NewRegisteredTimer("perf/statedb/getstorageroot/time", nil)
@@ -422,6 +423,10 @@ func (s *StateDB) SubRefund(gas uint64) {
 // Exist reports whether the given account address exists in the state.
 // Notably this also returns true for self-destructed accounts.
 func (s *StateDB) Exist(addr common.Address) bool {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBExistTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.Exist")()
 	return s.getStateObject(addr) != nil
 }
@@ -431,7 +436,7 @@ func (s *StateDB) Exist(addr common.Address) bool {
 func (s *StateDB) Empty(addr common.Address) bool {
 	if s.EnablePerf {
 		start := time.Now()
-		defer perfStateDBExistTime.UpdateSince(start)
+		defer perfStateDBEmptyTime.UpdateSince(start)
 	}
 	defer debug.Handler.StartRegionAuto("StateDB.Empty")()
 	so := s.getStateObject(addr)

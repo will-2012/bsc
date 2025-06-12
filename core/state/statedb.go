@@ -45,6 +45,22 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var perfStateDBRefundTime = metrics.NewRegisteredTimer("perf/statedb/refund/time", nil)
+var perfStateDBExistTime = metrics.NewRegisteredTimer("perf/statedb/exist/time", nil)
+var perfStateDBGetBalanceTime = metrics.NewRegisteredTimer("perf/statedb/getbalance/time", nil)
+var perfStateDBGetNonceTime = metrics.NewRegisteredTimer("perf/statedb/getnonce/time", nil)
+var perfStateDBGetStorageRootTime = metrics.NewRegisteredTimer("perf/statedb/getstorageroot/time", nil)
+var perfStateDBGetCodeTime = metrics.NewRegisteredTimer("perf/statedb/getcode/time", nil)
+var perfStateDBGetCodeSizeTime = metrics.NewRegisteredTimer("perf/statedb/getcodesize/time", nil)
+var perfStateDBGetCodeHashTime = metrics.NewRegisteredTimer("perf/statedb/getcodehash/time", nil)
+var perfStateDBGetStateTime = metrics.NewRegisteredTimer("perf/statedb/getstate/time", nil)
+var perfStateDBGetRootTime = metrics.NewRegisteredTimer("perf/statedb/getroot/time", nil)
+var perfStateDBGetCommittedStateTime = metrics.NewRegisteredTimer("perf/statedb/getcommittedstate/time", nil)
+var perfStateDBUpdateBalanceTime = metrics.NewRegisteredTimer("perf/statedb/updatebalance/time", nil)
+var perfStateDBUpdateNonceTime = metrics.NewRegisteredTimer("perf/statedb/updatenonce/time", nil)
+var perfStateDBUpdateCodeTime = metrics.NewRegisteredTimer("perf/statedb/updatecode/time", nil)
+var perfStateDBUpdateStateTime = metrics.NewRegisteredTimer("perf/statedb/updatestate/time", nil)
+
 const defaultNumOfSlots = 100
 
 // TriesInMemory represents the number of layers that are kept in RAM.
@@ -381,6 +397,10 @@ func (s *StateDB) Preimages() map[common.Hash][]byte {
 
 // AddRefund adds gas to the refund counter
 func (s *StateDB) AddRefund(gas uint64) {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBRefundTime.UpdateSince(start)
+	}
 	s.journal.refundChange(s.refund)
 	s.refund += gas
 }
@@ -388,6 +408,10 @@ func (s *StateDB) AddRefund(gas uint64) {
 // SubRefund removes gas from the refund counter.
 // This method will panic if the refund counter goes below zero
 func (s *StateDB) SubRefund(gas uint64) {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBRefundTime.UpdateSince(start)
+	}
 	s.journal.refundChange(s.refund)
 	if gas > s.refund {
 		panic(fmt.Sprintf("Refund counter below zero (gas: %d > refund: %d)", gas, s.refund))
@@ -405,6 +429,10 @@ func (s *StateDB) Exist(addr common.Address) bool {
 // Empty returns whether the state object is either non-existent
 // or empty according to the EIP161 specification (balance = nonce = code = 0)
 func (s *StateDB) Empty(addr common.Address) bool {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBExistTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.Empty")()
 	so := s.getStateObject(addr)
 	return so == nil || so.empty()
@@ -412,6 +440,10 @@ func (s *StateDB) Empty(addr common.Address) bool {
 
 // GetBalance retrieves the balance from the given address or 0 if object not found
 func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetBalanceTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetBalance")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -422,6 +454,10 @@ func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
 
 // GetNonce retrieves the nonce from the given address or 0 if object not found
 func (s *StateDB) GetNonce(addr common.Address) uint64 {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetNonceTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetNonce")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -434,6 +470,10 @@ func (s *StateDB) GetNonce(addr common.Address) uint64 {
 // GetStorageRoot retrieves the storage root from the given address or empty
 // if object not found.
 func (s *StateDB) GetStorageRoot(addr common.Address) common.Hash {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetStorageRootTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetStorageRoot")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -448,6 +488,10 @@ func (s *StateDB) TxIndex() int {
 }
 
 func (s *StateDB) GetCode(addr common.Address) []byte {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetCodeTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetCode")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -460,6 +504,10 @@ func (s *StateDB) GetCode(addr common.Address) []byte {
 }
 
 func (s *StateDB) GetRoot(addr common.Address) common.Hash {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetRootTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetRoot")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -469,6 +517,10 @@ func (s *StateDB) GetRoot(addr common.Address) common.Hash {
 }
 
 func (s *StateDB) GetCodeSize(addr common.Address) int {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetCodeSizeTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetCodeSize")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -481,6 +533,10 @@ func (s *StateDB) GetCodeSize(addr common.Address) int {
 }
 
 func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetCodeHashTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetCodeHash")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -491,6 +547,10 @@ func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
 
 // GetState retrieves the value associated with the specific key.
 func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetStateTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetState")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -502,6 +562,10 @@ func (s *StateDB) GetState(addr common.Address, hash common.Hash) common.Hash {
 // GetCommittedState retrieves the value associated with the specific key
 // without any mutations caused in the current execution.
 func (s *StateDB) GetCommittedState(addr common.Address, hash common.Hash) common.Hash {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBGetCommittedStateTime.UpdateSince(start)
+	}
 	defer debug.Handler.StartRegionAuto("StateDB.GetCommittedState")()
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -530,6 +594,10 @@ func (s *StateDB) HasSelfDestructed(addr common.Address) bool {
 
 // AddBalance adds amount to the account associated with addr.
 func (s *StateDB) AddBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBUpdateBalanceTime.UpdateSince(start)
+	}
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject == nil {
 		return uint256.Int{}
@@ -539,6 +607,10 @@ func (s *StateDB) AddBalance(addr common.Address, amount *uint256.Int, reason tr
 
 // SubBalance subtracts amount from the account associated with addr.
 func (s *StateDB) SubBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) uint256.Int {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBUpdateBalanceTime.UpdateSince(start)
+	}
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject == nil {
 		return uint256.Int{}
@@ -550,6 +622,10 @@ func (s *StateDB) SubBalance(addr common.Address, amount *uint256.Int, reason tr
 }
 
 func (s *StateDB) SetBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBUpdateBalanceTime.UpdateSince(start)
+	}
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject != nil {
 		stateObject.SetBalance(amount)
@@ -557,6 +633,10 @@ func (s *StateDB) SetBalance(addr common.Address, amount *uint256.Int, reason tr
 }
 
 func (s *StateDB) SetNonce(addr common.Address, nonce uint64, reason tracing.NonceChangeReason) {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBUpdateNonceTime.UpdateSince(start)
+	}
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject != nil {
 		stateObject.SetNonce(nonce)
@@ -564,6 +644,10 @@ func (s *StateDB) SetNonce(addr common.Address, nonce uint64, reason tracing.Non
 }
 
 func (s *StateDB) SetCode(addr common.Address, code []byte) (prev []byte) {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBUpdateCodeTime.UpdateSince(start)
+	}
 	stateObject := s.getOrNewStateObject(addr)
 	if stateObject != nil {
 		return stateObject.SetCode(crypto.Keccak256Hash(code), code)
@@ -572,6 +656,10 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) (prev []byte) {
 }
 
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash) common.Hash {
+	if s.EnablePerf {
+		start := time.Now()
+		defer perfStateDBUpdateStateTime.UpdateSince(start)
+	}
 	if stateObject := s.getOrNewStateObject(addr); stateObject != nil {
 		return stateObject.SetState(key, value)
 	}

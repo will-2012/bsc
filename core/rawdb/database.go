@@ -474,6 +474,7 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, ancient string, namespace st
 	if chainFreezerDir != "" {
 		chainFreezerDir = resolveChainFreezerDir(chainFreezerDir)
 	}
+	log.Info("debug prefetcher, chainFreezerDir", "chainFreezerDir", chainFreezerDir)
 
 	var offset uint64
 	// The offset of ancientDB should be handled differently in different scenarios.

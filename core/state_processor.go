@@ -31,9 +31,17 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+var processTxTimer = metrics.NewRegisteredTimer("process/tx/time", nil)
+var processInnerTxTimer = metrics.NewRegisteredTimer("process/inner/tx/time", nil)
+
+var applyMsgTimer = metrics.NewRegisteredTimer("apply/msg/time", nil)
+var finaliseMsgTimer = metrics.NewRegisteredTimer("finalise/msg/time", nil)
 
 const largeTxGasLimit = 10000000 // 10M Gas, to measure the execution time of large tx
 
@@ -72,6 +80,19 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		gp          = new(GasPool).AddGas(block.GasLimit())
 	)
 
+	statedb.EnablePerf = true
+	defer func() {
+		statedb.EnablePerf = false
+	}()
+
+	txNum := len(block.Transactions())
+	if !debug.Handler.EnableTraceCapture(block.Header().Number.Uint64(), "") {
+		debug.Handler.EnableTraceBigBlock(block.Header().Number.Uint64(), txNum, "")
+	}
+	log.Info("Process", "block", block.Header().Number)
+	traceMsg := "Process " + block.Header().Number.String()
+	defer debug.Handler.StartRegionAuto(traceMsg)()
+
 	// Mutate the block and state according to any hard-fork specs
 	if p.config.DAOForkSupport && p.config.DAOForkBlock != nil && p.config.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
@@ -87,8 +108,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	var (
 		context vm.BlockContext
 		signer  = types.MakeSigner(p.config, header.Number, header.Time)
-		txNum   = len(block.Transactions())
-		err     error
+
+		err error
 	)
 
 	// Apply pre-execution system calls.
@@ -98,6 +119,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	context = NewEVMBlockContext(header, p.chain, nil)
 	evm := vm.NewEVM(context, tracingStateDB, p.config, cfg)
+	evm.EnablePerf()
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, evm)
@@ -118,6 +140,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	systemTxs := make([]*types.Transaction, 0, 2)
 
 	for i, tx := range block.Transactions() {
+		start := time.Now()
 		if isPoSA {
 			if isSystemTx, err := posa.IsSystemTransaction(tx, block.Header()); err != nil {
 				bloomProcessors.Close()
@@ -142,13 +165,20 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		statedb.SetTxContext(tx.Hash(), i)
 
+		startInnerTx := time.Now()
 		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, tx, usedGas, evm, bloomProcessors)
 		if err != nil {
 			bloomProcessors.Close()
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
+		if metrics.EnabledExpensive() {
+			processInnerTxTimer.UpdateSince(startInnerTx)
+		}
 		commonTxs = append(commonTxs, tx)
 		receipts = append(receipts, receipt)
+		if metrics.EnabledExpensive() {
+			processTxTimer.UpdateSince(start)
+		}
 	}
 	bloomProcessors.Close()
 
@@ -191,6 +221,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 // and uses the input parameters for its environment similar to ApplyTransaction. However,
 // this method takes an already created EVM instance as input.
 func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM, receiptProcessors ...ReceiptProcessor) (receipt *types.Receipt, err error) {
+	defer debug.Handler.StartRegionAuto("ApplyTransactionWithEVM")()
 	// Add timing measurement
 	var result *ExecutionResult
 	if tx.Gas() > largeTxGasLimit {
@@ -212,14 +243,22 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		}
 	}
 	// Apply the transaction to the current state (included in the env).
+	startApplyMsg := time.Now()
 	result, err = ApplyMessage(evm, msg, gp)
 	if err != nil {
 		return nil, err
 	}
+	if metrics.EnabledExpensive() {
+		applyMsgTimer.UpdateSince(startApplyMsg)
+	}
 	// Update the state with pending changes.
 	var root []byte
 	if evm.ChainConfig().IsByzantium(blockNumber) {
+		startFinalise := time.Now()
 		evm.StateDB.Finalise(true)
+		if metrics.EnabledExpensive() {
+			finaliseMsgTimer.UpdateSince(startFinalise)
+		}
 	} else {
 		root = statedb.IntermediateRoot(evm.ChainConfig().IsEIP158(blockNumber)).Bytes()
 	}
@@ -284,6 +323,8 @@ func ApplyTransaction(evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *
 // ProcessBeaconBlockRoot applies the EIP-4788 system call to the beacon block root
 // contract. This method is exported to be used in tests.
 func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
+	defer debug.Handler.StartRegionAuto("ProcessBeaconBlockRoot")()
+
 	// Return immediately if beaconRoot equals the zero hash when using the Parlia engine.
 	if beaconRoot == (common.Hash{}) {
 		if chainConfig := evm.ChainConfig(); chainConfig != nil && chainConfig.Parlia != nil {
@@ -314,6 +355,7 @@ func ProcessBeaconBlockRoot(beaconRoot common.Hash, evm *vm.EVM) {
 // ProcessParentBlockHash stores the parent block hash in the history storage contract
 // as per EIP-2935/7709.
 func ProcessParentBlockHash(prevHash common.Hash, evm *vm.EVM) {
+	defer debug.Handler.StartRegionAuto("ProcessParentBlockHash")()
 	if tracer := evm.Config.Tracer; tracer != nil {
 		onSystemCallStart(tracer, evm.GetVMContext())
 		if tracer.OnSystemCallEnd != nil {

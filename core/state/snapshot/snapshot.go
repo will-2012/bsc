@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -34,29 +35,36 @@ import (
 )
 
 var (
-	snapshotCleanAccountHitMeter   = metrics.NewRegisteredMeter("state/snapshot/clean/account/hit", nil)
-	snapshotCleanAccountMissMeter  = metrics.NewRegisteredMeter("state/snapshot/clean/account/miss", nil)
-	snapshotCleanAccountInexMeter  = metrics.NewRegisteredMeter("state/snapshot/clean/account/inex", nil)
-	snapshotCleanAccountReadMeter  = metrics.NewRegisteredMeter("state/snapshot/clean/account/read", nil)
-	snapshotCleanAccountWriteMeter = metrics.NewRegisteredMeter("state/snapshot/clean/account/write", nil)
+	snapshotCleanAccountHitMeter     = metrics.NewRegisteredMeter("state/snapshot/clean/account/hit", nil)
+	perfSnapshotCleanAccountHitMeter = metrics.NewRegisteredMeter("perf/state/snapshot/clean/account/hit", nil)
+	snapshotCleanAccountMissMeter    = metrics.NewRegisteredMeter("state/snapshot/clean/account/miss", nil)
+	snapshotCleanAccountInexMeter    = metrics.NewRegisteredMeter("state/snapshot/clean/account/inex", nil)
+	snapshotCleanAccountReadMeter    = metrics.NewRegisteredMeter("state/snapshot/clean/account/read", nil)
+	snapshotCleanAccountWriteMeter   = metrics.NewRegisteredMeter("state/snapshot/clean/account/write", nil)
 
-	snapshotCleanStorageHitMeter   = metrics.NewRegisteredMeter("state/snapshot/clean/storage/hit", nil)
-	snapshotCleanStorageMissMeter  = metrics.NewRegisteredMeter("state/snapshot/clean/storage/miss", nil)
-	snapshotCleanStorageInexMeter  = metrics.NewRegisteredMeter("state/snapshot/clean/storage/inex", nil)
-	snapshotCleanStorageReadMeter  = metrics.NewRegisteredMeter("state/snapshot/clean/storage/read", nil)
-	snapshotCleanStorageWriteMeter = metrics.NewRegisteredMeter("state/snapshot/clean/storage/write", nil)
+	snapshotCleanStorageHitMeter     = metrics.NewRegisteredMeter("state/snapshot/clean/storage/hit", nil)
+	perfSnapshotCleanStorageHitMeter = metrics.NewRegisteredMeter("perf/state/snapshot/clean/storage/hit", nil)
+	snapshotCleanStorageMissMeter    = metrics.NewRegisteredMeter("state/snapshot/clean/storage/miss", nil)
+	snapshotCleanStorageInexMeter    = metrics.NewRegisteredMeter("state/snapshot/clean/storage/inex", nil)
+	snapshotCleanStorageReadMeter    = metrics.NewRegisteredMeter("state/snapshot/clean/storage/read", nil)
+	snapshotCleanStorageWriteMeter   = metrics.NewRegisteredMeter("state/snapshot/clean/storage/write", nil)
 
-	snapshotDirtyAccountHitMeter   = metrics.NewRegisteredMeter("state/snapshot/dirty/account/hit", nil)
-	snapshotDirtyAccountMissMeter  = metrics.NewRegisteredMeter("state/snapshot/dirty/account/miss", nil)
-	snapshotDirtyAccountInexMeter  = metrics.NewRegisteredMeter("state/snapshot/dirty/account/inex", nil)
-	snapshotDirtyAccountReadMeter  = metrics.NewRegisteredMeter("state/snapshot/dirty/account/read", nil)
-	snapshotDirtyAccountWriteMeter = metrics.NewRegisteredMeter("state/snapshot/dirty/account/write", nil)
+	snapshotDirtyAccountHitMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/account/hit", nil)
+	perfSnapshotDirtyAccountHitMeter = metrics.NewRegisteredMeter("perf/state/snapshot/dirty/account/hit", nil)
 
-	snapshotDirtyStorageHitMeter   = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/hit", nil)
-	snapshotDirtyStorageMissMeter  = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/miss", nil)
-	snapshotDirtyStorageInexMeter  = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/inex", nil)
-	snapshotDirtyStorageReadMeter  = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/read", nil)
-	snapshotDirtyStorageWriteMeter = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/write", nil)
+	snapshotDirtyAccountMissMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/account/miss", nil)
+	perfSnapshotDirtyAccountMissMeter = metrics.NewRegisteredMeter("perf/state/snapshot/dirty/account/miss", nil)
+	snapshotDirtyAccountInexMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/account/inex", nil)
+	snapshotDirtyAccountReadMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/account/read", nil)
+	snapshotDirtyAccountWriteMeter    = metrics.NewRegisteredMeter("state/snapshot/dirty/account/write", nil)
+
+	snapshotDirtyStorageHitMeter      = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/hit", nil)
+	perfSnapshotDirtyStorageHitMeter  = metrics.NewRegisteredMeter("perf/state/snapshot/dirty/storage/hit", nil)
+	snapshotDirtyStorageMissMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/miss", nil)
+	perfSnapshotDirtyStorageMissMeter = metrics.NewRegisteredMeter("perf/state/snapshot/dirty/storage/miss", nil)
+	snapshotDirtyStorageInexMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/inex", nil)
+	snapshotDirtyStorageReadMeter     = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/read", nil)
+	snapshotDirtyStorageWriteMeter    = metrics.NewRegisteredMeter("state/snapshot/dirty/storage/write", nil)
 
 	snapshotDirtyAccountHitDepthHist = metrics.NewRegisteredHistogram("state/snapshot/dirty/account/hit/depth", nil, metrics.NewExpDecaySample(1028, 0.015))
 
@@ -102,7 +110,7 @@ type Snapshot interface {
 
 	// Account directly retrieves the account associated with a particular hash in
 	// the snapshot slim data format.
-	Account(hash common.Hash) (*types.SlimAccount, error)
+	Account(hash common.Hash, enablePerf bool) (*types.SlimAccount, error)
 
 	// Accounts directly retrieves all accounts in current snapshot in
 	// the snapshot slim data format.
@@ -110,11 +118,11 @@ type Snapshot interface {
 
 	// AccountRLP directly retrieves the account RLP associated with a particular
 	// hash in the snapshot slim data format.
-	AccountRLP(hash common.Hash) ([]byte, error)
+	AccountRLP(hash common.Hash, enablePerf bool) ([]byte, error)
 
 	// Storage directly retrieves the storage data associated with a particular hash,
 	// within a particular account.
-	Storage(accountHash, storageHash common.Hash) ([]byte, error)
+	Storage(accountHash, storageHash common.Hash, enablePerf bool) ([]byte, error)
 
 	// Parent returns the subsequent layer of a snapshot, or nil if the base was
 	// reached.
@@ -337,6 +345,7 @@ func (t *Tree) Snapshots(root common.Hash, limits int, nodisk bool) []Snapshot {
 		}
 		layer = parent
 	}
+	log.Info("Tree Snapshots", "root", root, "limits", limits, "len(ret layers)", len(ret))
 	return ret
 }
 
@@ -530,6 +539,7 @@ func (t *Tree) cap(diff *diffLayer, layers int) *diskLayer {
 // The disk layer persistence should be operated in an atomic way. All updates should
 // be discarded if the whole transition if not finished.
 func diffToDisk(bottom *diffLayer) *diskLayer {
+	defer debug.Handler.StartRegionAuto("diffToDisk")()
 	var (
 		base  = bottom.parent.(*diskLayer)
 		batch = base.diskdb.NewBatch()

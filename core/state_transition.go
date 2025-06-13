@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -29,9 +30,17 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/internal/debug"
+	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
+
+var perfExecute1Timer = metrics.NewRegisteredTimer("perf/execute1/time", nil)
+var perfExecute2Timer = metrics.NewRegisteredTimer("perf/execute2/time", nil)
+var perfExecute3Timer = metrics.NewRegisteredTimer("perf/execute3/time", nil)
+var perfExecute31Timer = metrics.NewRegisteredTimer("perf/execute31/time", nil)
+var perfExecute4Timer = metrics.NewRegisteredTimer("perf/execute4/time", nil)
 
 // ExecutionResult includes all output after executing given evm
 // message no matter the execution itself is successful or not.
@@ -206,6 +215,7 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 // indicates a core error meaning that the message would always fail for that particular
 // state and would never be accepted within a block.
 func ApplyMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
+	defer debug.Handler.StartRegionAuto("ApplyMessage")()
 	evm.SetTxContext(NewEVMTxContext(msg))
 	return newStateTransition(evm, msg, gp).execute()
 }
@@ -417,8 +427,11 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 	// 4. the purchased gas is enough to cover intrinsic usage
 	// 5. there is no overflow when calculating intrinsic gas
 	// 6. caller has enough balance to cover asset transfer for **topmost** call
-
+	// ctx, task := trace.NewTask(context.Background(), "transitionDb")
+	// defer task.End()
 	// Check clauses 1-3, buy gas if everything is correct
+
+	start1 := time.Now()
 	if err := st.preCheck(); err != nil {
 		return nil, err
 	}
@@ -440,6 +453,11 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 			}
 		}
 	}
+	if st.evm.NeedPerf() {
+		perfExecute1Timer.UpdateSince(start1)
+	}
+
+	start2 := time.Now()
 	// Check clauses 4-5, subtract intrinsic gas if everything is correct
 	gas, err := IntrinsicGas(msg.Data, msg.AccessList, msg.SetCodeAuthorizations, contractCreation, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai)
 	if err != nil {
@@ -485,6 +503,11 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		return nil, fmt.Errorf("%w: code size %v limit %v", ErrMaxInitCodeSizeExceeded, len(msg.Data), params.MaxInitCodeSize)
 	}
 
+	if st.evm.NeedPerf() {
+		perfExecute2Timer.UpdateSince(start2)
+	}
+
+	start3 := time.Now()
 	// Execute the preparatory steps for state transition which includes:
 	// - prepare accessList(post-berlin)
 	// - reset transient storage(eip 1153)
@@ -518,8 +541,17 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		}
 
 		// Execute the transaction's call.
+		start31 := time.Now()
 		ret, st.gasRemaining, vmerr = st.evm.Call(sender, st.to(), msg.Data, st.gasRemaining, value)
+		if st.evm.NeedPerf() {
+			perfExecute31Timer.UpdateSince(start31)
+		}
 	}
+	if st.evm.NeedPerf() {
+		perfExecute3Timer.UpdateSince(start3)
+	}
+
+	start4 := time.Now()
 
 	// Compute refund counter, capped to a refund quotient.
 	gasRefund := st.calcRefund()
@@ -564,6 +596,10 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		if rules.IsEIP4762 && fee.Sign() != 0 {
 			st.evm.AccessEvents.AddAccount(st.evm.Context.Coinbase, true)
 		}
+	}
+
+	if st.evm.NeedPerf() {
+		perfExecute4Timer.UpdateSince(start4)
 	}
 
 	return &ExecutionResult{

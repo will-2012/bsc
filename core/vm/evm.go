@@ -122,6 +122,8 @@ type EVM struct {
 	callGasTemp uint64
 	// precompiles holds the precompiled contracts for the current epoch
 	precompiles map[common.Address]PrecompiledContract
+
+	enablePerf bool
 }
 
 // NewEVM constructs an EVM instance with the supplied block context, state
@@ -140,6 +142,14 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 	evm.interpreter = NewEVMInterpreter(evm)
 
 	return evm
+}
+
+func (evm *EVM) EnablePerf() {
+	evm.enablePerf = true
+}
+
+func (evm *EVM) NeedPerf() bool {
+	return evm.enablePerf
 }
 
 // SetPrecompiles sets the precompiled contracts for the EVM.

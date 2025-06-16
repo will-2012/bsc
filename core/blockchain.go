@@ -2275,13 +2275,12 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 
 		interruptCh := make(chan struct{})
 		var reader state.Reader = nil
+		reader, err = bc.statedb.ReaderWithCache(parent.Root)
+		if err != nil {
+			return nil, 0, err
+		}
 		// For diff sync, it may fallback to full sync, so we still do prefetch
 		if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
-			// todo:
-			reader, err := bc.statedb.ReaderWithCache(parent.Root)
-			if err != nil {
-				return nil, 0, err
-			}
 			throwaway, err := state.NewWithReader(parent.Root, bc.statedb, reader)
 			if err != nil {
 				return nil, 0, err

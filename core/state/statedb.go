@@ -182,35 +182,44 @@ func NewWithSharedPool(root common.Hash, db Database) (*StateDB, error) {
 
 // New creates a new state from a given trie.
 func New(root common.Hash, db Database) (*StateDB, error) {
-	tr, err := db.OpenTrie(root)
-	if err != nil {
-		return nil, err
-	}
-	_, noTrie := tr.(*trie.EmptyTrie)
 	reader, err := db.Reader(root)
 	if err != nil {
 		return nil, err
 	}
-	sdb := &StateDB{
-		db:                   db,
-		trie:                 tr,
-		noTrie:               noTrie,
-		originalRoot:         root,
-		reader:               reader,
-		stateObjects:         make(map[common.Address]*stateObject, defaultNumOfSlots),
-		stateObjectsDestruct: make(map[common.Address]*stateObject, defaultNumOfSlots),
-		mutations:            make(map[common.Address]*mutation, defaultNumOfSlots),
-		logs:                 make(map[common.Hash][]*types.Log),
-		preimages:            make(map[common.Hash][]byte),
-		journal:              newJournal(),
-		accessList:           newAccessList(),
-		transientStorage:     newTransientStorage(),
-	}
-	if db.TrieDB().IsVerkle() {
-		sdb.accessEvents = NewAccessEvents(db.PointCache())
-	}
-	return sdb, nil
+	return NewWithReader(root, db, reader)
 }
+
+// // New creates a new state from a given trie.
+// func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
+// 	tr, err := db.OpenTrie(root)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	_, noTrie := tr.(*trie.EmptyTrie)
+// 	//reader, err := db.Reader(root)
+// 	//if err != nil {
+// 	//	return nil, err
+// 	//}
+// 	sdb := &StateDB{
+// 		db:                   db,
+// 		trie:                 tr,
+// 		noTrie:               noTrie,
+// 		originalRoot:         root,
+// 		reader:               reader,
+// 		stateObjects:         make(map[common.Address]*stateObject, defaultNumOfSlots),
+// 		stateObjectsDestruct: make(map[common.Address]*stateObject, defaultNumOfSlots),
+// 		mutations:            make(map[common.Address]*mutation, defaultNumOfSlots),
+// 		logs:                 make(map[common.Hash][]*types.Log),
+// 		preimages:            make(map[common.Hash][]byte),
+// 		journal:              newJournal(),
+// 		accessList:           newAccessList(),
+// 		transientStorage:     newTransientStorage(),
+// 	}
+// 	if db.TrieDB().IsVerkle() {
+// 		sdb.accessEvents = NewAccessEvents(db.PointCache())
+// 	}
+// 	return sdb, nil
+// }
 
 func (s *StateDB) EnableWriteOnSharedStorage() {
 	s.writeOnSharedStorage = true
@@ -233,6 +242,33 @@ func (s *StateDB) TransferPrefetcher(prev *StateDB) {
 	s.prefetcherLock.Lock()
 	s.prefetcher = fetcher
 	s.prefetcherLock.Unlock()
+}
+
+// NewWithReader creates a new state for the specified state root. Unlike New,
+// this function accepts an additional Reader which is bound to the given root.
+func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
+	tr, err := db.OpenTrie(root)
+	if err != nil {
+		return nil, err
+	}
+	sdb := &StateDB{
+		db:                   db,
+		trie:                 tr,
+		originalRoot:         root,
+		reader:               reader,
+		stateObjects:         make(map[common.Address]*stateObject),
+		stateObjectsDestruct: make(map[common.Address]*stateObject),
+		mutations:            make(map[common.Address]*mutation),
+		logs:                 make(map[common.Hash][]*types.Log),
+		preimages:            make(map[common.Hash][]byte),
+		journal:              newJournal(),
+		accessList:           newAccessList(),
+		transientStorage:     newTransientStorage(),
+	}
+	if db.TrieDB().IsVerkle() {
+		sdb.accessEvents = NewAccessEvents(db.PointCache())
+	}
+	return sdb, nil
 }
 
 // StartPrefetcher initializes a new trie prefetcher to pull in nodes from the
@@ -497,6 +533,12 @@ func (s *StateDB) GetCommittedState(addr common.Address, hash common.Hash) commo
 // Database retrieves the low level database supporting the lower level trie ops.
 func (s *StateDB) Database() Database {
 	return s.db
+}
+
+// Reader retrieves the low level database reader supporting the
+// lower level operations.
+func (s *StateDB) Reader() Reader {
+	return s.reader
 }
 
 func (s *StateDB) HasSelfDestructed(addr common.Address) bool {

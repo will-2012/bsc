@@ -2361,26 +2361,9 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 		startTime   = time.Now()
 		statedb     *state.StateDB
 		interruptCh = make(chan struct{})
+		throwaway   *state.StateDB
 	)
 	//defer close(interruptCh) // terminate the prefetch at the end
-
-	// If we are past Byzantium, enable prefetching to pull in trie node paths
-	// while processing transactions. Before Byzantium the prefetcher is mostly
-	// useless due to the intermediate root hashing after each transaction.
-	var witness *stateless.Witness
-	if bc.chainConfig.IsByzantium(block.Number()) {
-		// Generate witnesses either if we're self-testing, or if it's the
-		// only block being inserted. A bit crude, but witnesses are huge,
-		// so we refuse to make an entire chain of them.
-		if bc.vmConfig.StatelessSelfValidation || makeWitness {
-			witness, err = stateless.NewWitness(block.Header(), bc)
-			if err != nil {
-				return nil, err
-			}
-		}
-		statedb.StartPrefetcher("chain", witness)
-		//defer statedb.StopPrefetcher()
-	}
 
 	if bc.cacheConfig.TrieCleanNoPrefetch || len(block.Transactions()) < prefetchTxNumber {
 		statedb, err = state.New(parentRoot, bc.statedb)
@@ -2414,6 +2397,26 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 			blockPrefetchExecuteTimer.Update(time.Since(start))
 		}(time.Now(), throwaway, block)
 
+	}
+
+	// If we are past Byzantium, enable prefetching to pull in trie node paths
+	// while processing transactions. Before Byzantium the prefetcher is mostly
+	// useless due to the intermediate root hashing after each transaction.
+	var witness *stateless.Witness
+	if bc.chainConfig.IsByzantium(block.Number()) {
+		// Generate witnesses either if we're self-testing, or if it's the
+		// only block being inserted. A bit crude, but witnesses are huge,
+		// so we refuse to make an entire chain of them.
+		if bc.vmConfig.StatelessSelfValidation || makeWitness {
+			witness, err = stateless.NewWitness(block.Header(), bc)
+			if err != nil {
+				return nil, err
+			}
+		}
+		statedb.StartPrefetcher("chain", witness)
+		//defer statedb.StopPrefetcher()
+	}
+	if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
 		go throwaway.TriePrefetchInAdvance(block, signer)
 	}
 

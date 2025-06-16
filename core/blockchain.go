@@ -2281,13 +2281,13 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		}
 		// For diff sync, it may fallback to full sync, so we still do prefetch
 		if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
-			throwaway, err := state.NewWithReader(parent.Root, bc.statedb, reader)
+			cacheReader, err := state.NewWithReader(parent.Root, bc.statedb, reader)
 			if err != nil {
 				return nil, 0, err
 			}
 			// do Prefetch in a separate goroutine to avoid blocking the critical path
 			// 1.do state prefetch for snapshot cache
-			//throwaway := statedb.CopyDoPrefetch()
+			throwaway := cacheReader.CopyDoPrefetch()
 			// Disable tracing for prefetcher executions.
 			vmCfg := bc.vmConfig
 			vmCfg.Tracer = nil

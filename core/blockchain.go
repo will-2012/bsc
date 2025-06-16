@@ -2257,7 +2257,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 
 		// The traced section of block import.
 		start := time.Now()
-		res, err := bc.processBlock(parent.Root, block, setHead, makeWitness && len(chain) == 1)
+		res, err := bc.processBlock(parent.Root, block, setHead, makeWitness && len(chain) == 1, signer)
 		if err != nil {
 			return nil, it.index, err
 		}
@@ -2355,16 +2355,34 @@ type blockProcessingResult struct {
 
 // processBlock executes and validates the given block. If there was no error
 // it writes the block and associated state to database.
-func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, setHead bool, makeWitness bool) (_ *blockProcessingResult, blockEndErr error) {
+func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, setHead bool, makeWitness bool, signer types.Signer) (_ *blockProcessingResult, blockEndErr error) {
 	var (
 		err         error
 		startTime   = time.Now()
 		statedb     *state.StateDB
 		interruptCh = make(chan struct{})
 	)
-	defer close(interruptCh) // terminate the prefetch at the end
+	//defer close(interruptCh) // terminate the prefetch at the end
 
-	if bc.cacheConfig.TrieCleanNoPrefetch {
+	// If we are past Byzantium, enable prefetching to pull in trie node paths
+	// while processing transactions. Before Byzantium the prefetcher is mostly
+	// useless due to the intermediate root hashing after each transaction.
+	var witness *stateless.Witness
+	if bc.chainConfig.IsByzantium(block.Number()) {
+		// Generate witnesses either if we're self-testing, or if it's the
+		// only block being inserted. A bit crude, but witnesses are huge,
+		// so we refuse to make an entire chain of them.
+		if bc.vmConfig.StatelessSelfValidation || makeWitness {
+			witness, err = stateless.NewWitness(block.Header(), bc)
+			if err != nil {
+				return nil, err
+			}
+		}
+		statedb.StartPrefetcher("chain", witness)
+		//defer statedb.StopPrefetcher()
+	}
+
+	if bc.cacheConfig.TrieCleanNoPrefetch || len(block.Transactions()) < prefetchTxNumber {
 		statedb, err = state.New(parentRoot, bc.statedb)
 		if err != nil {
 			return nil, err
@@ -2395,24 +2413,8 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 
 			blockPrefetchExecuteTimer.Update(time.Since(start))
 		}(time.Now(), throwaway, block)
-	}
 
-	// If we are past Byzantium, enable prefetching to pull in trie node paths
-	// while processing transactions. Before Byzantium the prefetcher is mostly
-	// useless due to the intermediate root hashing after each transaction.
-	var witness *stateless.Witness
-	if bc.chainConfig.IsByzantium(block.Number()) {
-		// Generate witnesses either if we're self-testing, or if it's the
-		// only block being inserted. A bit crude, but witnesses are huge,
-		// so we refuse to make an entire chain of them.
-		if bc.vmConfig.StatelessSelfValidation || makeWitness {
-			witness, err = stateless.NewWitness(block.Header(), bc)
-			if err != nil {
-				return nil, err
-			}
-		}
-		statedb.StartPrefetcher("chain", witness)
-		defer statedb.StopPrefetcher()
+		go throwaway.TriePrefetchInAdvance(block, signer)
 	}
 
 	if bc.logger != nil && bc.logger.OnBlockStart != nil {

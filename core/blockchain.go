@@ -2403,7 +2403,7 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 	// while processing transactions. Before Byzantium the prefetcher is mostly
 	// useless due to the intermediate root hashing after each transaction.
 	var witness *stateless.Witness
-	if bc.chainConfig.IsByzantium(block.Number()) {
+	if bc.chainConfig.IsByzantium(block.Number()) && throwaway != nil {
 		// Generate witnesses either if we're self-testing, or if it's the
 		// only block being inserted. A bit crude, but witnesses are huge,
 		// so we refuse to make an entire chain of them.
@@ -2415,8 +2415,6 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 		}
 		statedb.StartPrefetcher("chain", witness)
 		//defer statedb.StopPrefetcher()
-	}
-	if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
 		go throwaway.TriePrefetchInAdvance(block, signer)
 	}
 

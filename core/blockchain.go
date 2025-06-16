@@ -2281,18 +2281,18 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		}
 		// For diff sync, it may fallback to full sync, so we still do prefetch
 		if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
-			cacheReader, err := state.NewWithReader(parent.Root, bc.statedb, reader)
+			statedbCacheReader, err := state.NewWithReader(parent.Root, bc.statedb, reader)
 			if err != nil {
 				return nil, 0, err
 			}
 			// do Prefetch in a separate goroutine to avoid blocking the critical path
 			// 1.do state prefetch for snapshot cache
-			throwaway := cacheReader.CopyDoPrefetch()
 			// Disable tracing for prefetcher executions.
 			vmCfg := bc.vmConfig
 			vmCfg.Tracer = nil
-			go bc.prefetcher.Prefetch(block, throwaway, &vmCfg, interruptCh)
+			go bc.prefetcher.Prefetch(block, statedbCacheReader, &vmCfg, interruptCh)
 
+			throwaway := statedb.CopyDoPrefetch()
 			// 2.do trie prefetch for MPT trie node cache
 			// it is for the big state trie tree, prefetch based on transaction's From/To address.
 			// trie prefetcher is thread safe now, ok to prefetch in a separate routine

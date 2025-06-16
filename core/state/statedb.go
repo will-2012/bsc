@@ -822,12 +822,12 @@ func (s *StateDB) CopyDoPrefetch() *StateDB {
 // otherwise, just do inactive copy trie prefetcher.
 func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 	// Copy all the basic fields, initialize the memory ones
-	//reader, _ := s.db.Reader(s.originalRoot) // impossible to fail
+	reader, _ := s.db.Reader(s.originalRoot) // impossible to fail
 	state := &StateDB{
 		db:   s.db,
 		trie: mustCopyTrie(s.trie),
 		// noTrie:s.noTrie,
-		reader: s.reader,
+		reader: reader,
 		// expectedRoot:         s.expectedRoot,
 		originalRoot: s.originalRoot,
 		// fullProcessed:        s.fullProcessed,

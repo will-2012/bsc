@@ -512,23 +512,44 @@ func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, err
 // 	return value, nil
 // }
 
+// func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+// 	var (
+// 		value common.Hash
+// 	)
+
+// 	key := append(addr[:], slot[:]...)
+// 	if blob, found := r.cache.HasGet(nil, key); found {
+// 		value.SetBytes(blob)
+// 		return value, nil
+// 	}
+
+// 	// Try to resolve the requested storage slot from the underlying reader
+// 	value, err := r.Reader.Storage(addr, slot)
+// 	if err != nil {
+// 		return common.Hash{}, err
+// 	}
+// 	r.cache.Set(key, value.Bytes())
+
+// 	return value, nil
+// }
+
 func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	var (
 		value common.Hash
 	)
 
-	key := append(addr[:], slot[:]...)
-	if blob, found := r.cache.HasGet(nil, key); found {
-		value.SetBytes(blob)
-		return value, nil
-	}
+	// key := append(addr[:], slot[:]...)
+	// if blob, found := r.cache.HasGet(nil, key); found {
+	// 	value.SetBytes(blob)
+	// 	return value, nil
+	// }
 
 	// Try to resolve the requested storage slot from the underlying reader
 	value, err := r.Reader.Storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, err
 	}
-	r.cache.Set(key, value.Bytes())
+	//r.cache.Set(key, value.Bytes())
 
 	return value, nil
 }

@@ -168,6 +168,8 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	EnablePerf bool
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -730,6 +732,9 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 
 	start := time.Now()
 	acct, err := s.reader.Account(addr)
+	if s.EnablePerf {
+		perfOutAccountTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 		return nil

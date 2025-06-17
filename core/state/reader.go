@@ -473,37 +473,51 @@ func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, err
 // existent.
 //
 // An error will be returned if the state is corrupted in the underlying reader.
+// func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
+// 	var (
+// 		value  common.Hash
+// 		ok     bool
+// 		bucket = &r.storageBuckets[addr[0]&0xff]
+// 	)
+// 	// Try to resolve the requested storage slot in the local cache
+// 	start := time.Now()
+// 	bucket.lock.RLock()
+// 	slots, ok := bucket.storages[addr]
+// 	if ok {
+// 		perfCacheSlotTime.UpdateSince(start)
+// 		value, ok = slots[slot]
+// 	}
+// 	bucket.lock.RUnlock()
+// 	if ok {
+// 		return value, nil
+// 	}
+// 	// Try to resolve the requested storage slot from the underlying reader
+// 	value, err := r.Reader.Storage(addr, slot)
+// 	if err != nil {
+// 		return common.Hash{}, err
+// 	}
+// 	bucket.lock.Lock()
+// 	slots, ok = bucket.storages[addr]
+// 	if !ok {
+// 		slots = make(map[common.Hash]common.Hash)
+// 		bucket.storages[addr] = slots
+// 	}
+// 	slots[slot] = value
+// 	bucket.lock.Unlock()
+
+// 	return value, nil
+// }
+
 func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	var (
-		value  common.Hash
-		ok     bool
-		bucket = &r.storageBuckets[addr[0]&0xff]
+		value common.Hash
 	)
-	// Try to resolve the requested storage slot in the local cache
-	start := time.Now()
-	bucket.lock.RLock()
-	slots, ok := bucket.storages[addr]
-	if ok {
-		perfCacheSlotTime.UpdateSince(start)
-		value, ok = slots[slot]
-	}
-	bucket.lock.RUnlock()
-	if ok {
-		return value, nil
-	}
+
 	// Try to resolve the requested storage slot from the underlying reader
 	value, err := r.Reader.Storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, err
 	}
-	bucket.lock.Lock()
-	slots, ok = bucket.storages[addr]
-	if !ok {
-		slots = make(map[common.Hash]common.Hash)
-		bucket.storages[addr] = slots
-	}
-	slots[slot] = value
-	bucket.lock.Unlock()
 
 	return value, nil
 }

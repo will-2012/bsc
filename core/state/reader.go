@@ -424,7 +424,7 @@ type readerWithCache struct {
 	// This reader is typically used in scenarios requiring concurrent
 	// access to storage. Using multiple buckets helps mitigate
 	// the overhead caused by locking.
-	storageBuckets [16]struct {
+	storageBuckets [256]struct {
 		lock     sync.RWMutex
 		storages map[common.Address]map[common.Hash]common.Hash
 	}
@@ -474,7 +474,7 @@ func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common
 	var (
 		value  common.Hash
 		ok     bool
-		bucket = &r.storageBuckets[addr[0]&0x0f]
+		bucket = &r.storageBuckets[addr[0]&0xff]
 	)
 	// Try to resolve the requested storage slot in the local cache
 	bucket.lock.RLock()

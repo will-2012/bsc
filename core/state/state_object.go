@@ -231,11 +231,15 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 	s.db.StorageLoaded++
 
-	var start time.Time
-	if metrics.EnabledExpensive() {
-		start = time.Now()
-	}
+	//var start time.Time
+	// if metrics.EnabledExpensive() {
+	// 	start = time.Now()
+	// }
+	start := time.Now()
 	value, err := s.db.reader.Storage(s.address, key)
+	if s.db.EnablePerf {
+		perfOutSlotTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -429,6 +430,8 @@ type readerWithCache struct {
 		lock     sync.RWMutex
 		storages map[common.Address]map[common.Hash]common.Hash
 	}
+
+	cache *fastcache.Cache
 }
 
 // newReaderWithCache constructs the reader with local cache.
@@ -440,6 +443,7 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 	for i := range r.storageBuckets {
 		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]common.Hash)
 	}
+	r.cache = fastcache.New(1024 * 1024 * 1024)
 	return r
 }
 
@@ -513,11 +517,18 @@ func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common
 		value common.Hash
 	)
 
+	key := append(addr[:], slot[:]...)
+	if blob, found := r.cache.HasGet(nil, key); found {
+		value.SetBytes(blob)
+		return value, nil
+	}
+
 	// Try to resolve the requested storage slot from the underlying reader
 	value, err := r.Reader.Storage(addr, slot)
 	if err != nil {
 		return common.Hash{}, err
 	}
+	r.cache.Set(key, value.Bytes())
 
 	return value, nil
 }

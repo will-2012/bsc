@@ -112,13 +112,17 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 				pickThread = i
 				break
 			}
-			if _, ok := conflictsMap[i][*tx.To()]; ok {
-				pickThread = i
-				break
+			if tx.To() != nil {
+				if _, ok := conflictsMap[i][*tx.To()]; ok {
+					pickThread = i
+					break
+				}
 			}
 		}
 		conflictsMap[pickThread][sender] = true
-		conflictsMap[pickThread][*tx.To()] = true
+		if tx.To() != nil {
+			conflictsMap[pickThread][*tx.To()] = true
+		}
 		//threadTxChans[pickThread] <- i
 
 		select {

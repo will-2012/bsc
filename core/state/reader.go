@@ -19,6 +19,7 @@ package state
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -448,10 +449,12 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 // An error will be returned if the state is corrupted in the underlying reader.
 func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, error) {
 	// Try to resolve the requested account in the local cache
+	start := time.Now()
 	r.accountLock.RLock()
 	acct, ok := r.accounts[addr]
 	r.accountLock.RUnlock()
 	if ok {
+		perfCacheAccountTime.UpdateSince(start)
 		return acct, nil
 	}
 	// Try to resolve the requested account from the underlying reader
@@ -477,9 +480,11 @@ func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common
 		bucket = &r.storageBuckets[addr[0]&0xff]
 	)
 	// Try to resolve the requested storage slot in the local cache
+	start := time.Now()
 	bucket.lock.RLock()
 	slots, ok := bucket.storages[addr]
 	if ok {
+		perfCacheSlotTime.UpdateSince(start)
 		value, ok = slots[slot]
 	}
 	bucket.lock.RUnlock()

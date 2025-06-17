@@ -17,6 +17,9 @@
 package core
 
 import (
+	"math/rand"
+
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -51,7 +54,14 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 		signer = types.MakeSigner(p.config, header.Number, header.Time)
 	)
 	transactions := block.Transactions()
-	txChan := make(chan int, prefetchThread)
+
+	conflictsMap := make(map[int]map[common.Address]bool, prefetchThread)
+	//txChan := make(chan int, prefetchThread)
+	var threadTxChans []chan int
+	for i := 0; i < prefetchThread; i++ {
+		threadTxChans = append(threadTxChans, make(chan int, prefetchThread))
+		conflictsMap[i] = make(map[common.Address]bool, prefetchThread)
+	}
 	// No need to execute the first batch, since the main processor will do it.
 	for i := 0; i < prefetchThread; i++ {
 		go func() {
@@ -65,7 +75,7 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 			// Iterate over and process the individual transactions
 			for {
 				select {
-				case txIndex := <-txChan:
+				case txIndex := <-threadTxChans[i]:
 					tx := transactions[txIndex]
 					// Convert the transaction into an executable message and pre-cache its sender
 					msg, err := TransactionToMessage(tx, signer, header.BaseFee)
@@ -89,8 +99,34 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 
 	// it should be in a separate goroutine, to avoid blocking the critical path.
 	for i := 0; i < len(transactions); i++ {
+		tx := transactions[i]
+		sender, err := types.Sender(signer, tx)
+		if err != nil {
+			continue
+		}
+		conflictThread := rand.Intn(prefetchThread)
+		pickThread := conflictThread
+		for j := 0; j < prefetchThread; j++ {
+			i := (conflictThread + j) % prefetchThread
+			if _, ok := conflictsMap[i][sender]; ok {
+				pickThread = i
+				break
+			}
+			if tx.To() != nil {
+				if _, ok := conflictsMap[i][*tx.To()]; ok {
+					pickThread = i
+					break
+				}
+			}
+		}
+		conflictsMap[pickThread][sender] = true
+		if tx.To() != nil {
+			conflictsMap[pickThread][*tx.To()] = true
+		}
+		//threadTxChans[pickThread] <- i
+
 		select {
-		case txChan <- i:
+		case threadTxChans[pickThread] <- i:
 		case <-interruptCh:
 			return
 		}

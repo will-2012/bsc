@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -426,12 +425,12 @@ type readerWithCache struct {
 	// This reader is typically used in scenarios requiring concurrent
 	// access to storage. Using multiple buckets helps mitigate
 	// the overhead caused by locking.
-	storageBuckets [256]struct {
-		lock     sync.RWMutex
-		storages map[common.Address]map[common.Hash]common.Hash
-	}
+	// storageBuckets [256]struct {
+	// 	lock     sync.RWMutex
+	// 	storages map[common.Address]map[common.Hash]common.Hash
+	// }
 
-	cache *fastcache.Cache
+	//cache *fastcache.Cache
 }
 
 // newReaderWithCache constructs the reader with local cache.
@@ -440,10 +439,10 @@ func newReaderWithCache(reader Reader) *readerWithCache {
 		Reader:   reader,
 		accounts: make(map[common.Address]*types.StateAccount),
 	}
-	for i := range r.storageBuckets {
-		r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]common.Hash)
-	}
-	r.cache = fastcache.New(1024 * 1024 * 1024)
+	// for i := range r.storageBuckets {
+	// 	r.storageBuckets[i].storages = make(map[common.Address]map[common.Hash]common.Hash)
+	// }
+	//r.cache = fastcache.New(1024 * 1024 * 1024)
 	return r
 }
 
@@ -534,9 +533,9 @@ func (r *readerWithCache) Account(addr common.Address) (*types.StateAccount, err
 // }
 
 func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	var (
-		value common.Hash
-	)
+	// var (
+	// 	value common.Hash
+	// )
 
 	// key := append(addr[:], slot[:]...)
 	// if blob, found := r.cache.HasGet(nil, key); found {
@@ -545,11 +544,11 @@ func (r *readerWithCache) Storage(addr common.Address, slot common.Hash) (common
 	// }
 
 	// Try to resolve the requested storage slot from the underlying reader
-	value, err := r.Reader.Storage(addr, slot)
-	if err != nil {
-		return common.Hash{}, err
-	}
+	return r.Reader.Storage(addr, slot)
+	// if err != nil {
+	// 	return common.Hash{}, err
+	// }
 	//r.cache.Set(key, value.Bytes())
 
-	return value, nil
+	//return value, nil
 }

@@ -56,9 +56,9 @@ func (p *statePrefetcher) Prefetch(block *types.Block, statedb *state.StateDB, c
 	for i := 0; i < prefetchThread; i++ {
 		go func() {
 			newStatedb := statedb.CopyDoPrefetch()
-			if !p.config.IsHertzfix(header.Number) {
-				newStatedb.EnableWriteOnSharedStorage()
-			}
+			//if !p.config.IsHertzfix(header.Number) {
+			newStatedb.EnableWriteOnSharedStorage()
+			//}
 			gaspool := new(GasPool).AddGas(block.GasLimit())
 			blockContext := NewEVMBlockContext(header, p.chain, nil)
 			evm := vm.NewEVM(blockContext, newStatedb, p.config, *cfg)

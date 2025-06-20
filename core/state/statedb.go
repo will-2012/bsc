@@ -97,7 +97,7 @@ type StateDB struct {
 
 	// This map holds 'live' objects, which will get modified while
 	// processing a state transition.
-	stateObjects map[common.Address]*stateObject
+	stateObjects map[common.Address]*stateObject // 2?
 
 	// This map holds 'deleted' objects. An object with the same address
 	// might also occur in the 'stateObjects' map due to account

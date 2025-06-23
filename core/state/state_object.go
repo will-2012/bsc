@@ -167,6 +167,11 @@ func (s *stateObject) getOriginStorage(key common.Hash) (common.Hash, bool) {
 	}
 	// if L1 cache miss, try to get it from shared pool
 	if s.sharedOriginStorage != nil {
+		if s.db.isHertzfix {
+			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
+				return common.Hash{}, false
+			}
+		}
 		val, ok := s.sharedOriginStorage.Load(key)
 		if !ok {
 			return common.Hash{}, false
@@ -226,11 +231,15 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 	s.db.StorageLoaded++
 
-	var start time.Time
-	if metrics.EnabledExpensive() {
-		start = time.Now()
-	}
+	//var start time.Time
+	// if metrics.EnabledExpensive() {
+	// 	start = time.Now()
+	// }
+	start := time.Now()
 	value, err := s.db.reader.Storage(s.address, key)
+	if s.db.EnablePerf {
+		perfOutSlotTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}

@@ -185,6 +185,7 @@ func NewWithCacheAmongBlocks(root common.Hash, db Database, cache *CacheAmongBlo
 	}
 
 	statedb.cacheAmongBlocks = cache
+	log.Info("set cache among blocks")
 	return statedb, nil
 }
 
@@ -223,6 +224,7 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 		journal:              newJournal(),
 		accessList:           newAccessList(),
 		transientStorage:     newTransientStorage(),
+		hasher:               crypto.NewKeccakState(),
 	}
 	if db.TrieDB().IsVerkle() {
 		sdb.accessEvents = NewAccessEvents(db.PointCache())
@@ -723,19 +725,31 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	var acct *types.StateAccount
 	var data *types.SlimAccount
 	accounthash := crypto.HashData(s.hasher, addr.Bytes())
+
+	accountHash := crypto.Keccak256Hash(addr[:])
+
+	if accountHash != accounthash {
+		log.Info("account hash is not the same as accounthash", "account", addr,
+			"account hash1", accountHash, "account hash2", accounthash)
+	}
 	// Try to get from cache among blocks if the cache root is the pre-state root
+	if s.cacheAmongBlocks != nil && s.cacheAmongBlocks.GetRoot() != s.originalRoot {
+		log.Info("cache among blocks root is not the pre-state root", "cache root", s.cacheAmongBlocks.GetRoot(), "pre-state root", s.originalRoot)
+	}
 	if s.cacheAmongBlocks != nil && s.cacheAmongBlocks.GetRoot() == s.originalRoot {
 		data, exist = s.cacheAmongBlocks.GetAccount(accounthash)
 		if exist {
+			log.Info("account hit in cache among blocks", "account", addr, "account hash", accounthash, "root", s.originalRoot)
+		} else {
+			log.Info("account miss in cache among blocks", "account", addr, "account hash", accounthash, "root", s.originalRoot)
+		}
+		if exist {
 			SnapshotBlockCacheAccountHitMeter.Mark(1)
+			//	log.Info("account hit in cache among blocks")
 			if data == nil {
 				return nil
 			}
-		} else {
-			SnapshotBlockCacheAccountMissMeter.Mark(1)
-		}
-
-		if err == nil || exist {
+			log.Info("account hit in cache among blocks", "account", addr)
 			acct = &types.StateAccount{
 				Nonce:    data.Nonce,
 				Balance:  data.Balance,
@@ -748,7 +762,11 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 			if acct.Root == (common.Hash{}) {
 				acct.Root = types.EmptyRootHash
 			}
+		} else {
+			//	log.Info("account hit in cache among blocks", "account", addr)
+			SnapshotBlockCacheAccountMissMeter.Mark(1)
 		}
+
 	}
 	if !exist {
 		start := time.Now()
@@ -863,6 +881,7 @@ func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 
 		transientStorage: s.transientStorage.Copy(),
 		journal:          s.journal.copy(),
+		hasher:           crypto.NewKeccakState(),
 	}
 
 	if s.witness != nil {
@@ -1311,6 +1330,7 @@ func (s *StateDB) handleDestruction(noStorageWiping bool) (map[common.Hash]*acco
 		op := &accountDelete{
 			address: addr,
 			origin:  types.SlimAccountRLP(*prev),
+			obj:     prevObj,
 		}
 		deletes[addrHash] = op
 
@@ -1507,7 +1527,13 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateU
 	origin := s.originalRoot
 	s.originalRoot = root
 
-	return newStateUpdate(noStorageWiping, origin, root, deletes, updates, nodes), nil
+	/*
+		if s.cacheAmongBlocks != nil {
+			s.cacheAmongBlocks.SetRoot(root)
+		}
+
+	*/
+	return newStateUpdate(s, noStorageWiping, origin, root, deletes, updates, nodes), nil
 }
 
 // commitAndFlush is a wrapper of commit which also commits the state mutations
@@ -1567,6 +1593,9 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 				s.TrieDBCommits += time.Since(start)
 			}
 		}
+	}
+	if s.cacheAmongBlocks != nil {
+		s.cacheAmongBlocks.SetRoot(s.originalRoot)
 	}
 	s.reader, _ = s.db.Reader(s.originalRoot)
 	return ret, err

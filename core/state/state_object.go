@@ -243,6 +243,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	if s.db.cacheAmongBlocks != nil && s.db.cacheAmongBlocks.GetRoot() == s.db.originalRoot {
 		enc, exist = s.db.cacheAmongBlocks.GetStorage(s.addrHash, storageKey)
 		if exist {
+			//	log.Info("account hit in cache among blocks")
 			SnapshotBlockCacheStorageHitMeter.Mark(1)
 		} else {
 			SnapshotBlockCacheStorageMissMeter.Mark(1)

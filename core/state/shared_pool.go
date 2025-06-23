@@ -5,6 +5,7 @@ import (
 
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -69,16 +70,19 @@ func (c *CacheAmongBlocks) GetRoot() common.Hash {
 }
 
 func (c *CacheAmongBlocks) PurgeStorageCache() {
+	log.Info("reset storage cache")
 	c.storagesCache.Reset()
 }
 
 func (c *CacheAmongBlocks) Reset() {
+	log.Info("reset storage account cache")
 	c.accountsCache.Reset()
 	c.storagesCache.Reset()
 	c.cacheRoot = types.EmptyRootHash
 }
 
 func (c *CacheAmongBlocks) SetRoot(root common.Hash) {
+	log.Info("set new cache among block root", "root", root)
 	c.cacheRoot = root
 }
 

@@ -188,7 +188,7 @@ func (s *stateObject) setOriginStorage(key common.Hash, value common.Hash) {
 // GetState retrieves a value from the committed account storage trie.
 // GetState retrieves a value associated with the given storage key.
 func (s *stateObject) GetState(key common.Hash) common.Hash {
-	value, _ := s.getState(key)
+	value, _ := s.getState(key) // ?? provide updated value api
 	return value
 }
 

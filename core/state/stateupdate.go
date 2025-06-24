@@ -22,7 +22,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb"
 )
@@ -101,7 +100,7 @@ func (sc *stateUpdate) empty() bool {
 //
 // rawStorageKey is a flag indicating whether to use the raw storage slot key or
 // the hash of the slot key for constructing state update object.
-func newStateUpdate(s *StateDB, rawStorageKey bool, originRoot common.Hash, root common.Hash, deletes map[common.Hash]*accountDelete, updates map[common.Hash]*accountUpdate, nodes *trienode.MergedNodeSet) *stateUpdate {
+func newStateUpdate(statedb *StateDB, rawStorageKey bool, originRoot common.Hash, root common.Hash, deletes map[common.Hash]*accountDelete, updates map[common.Hash]*accountUpdate, nodes *trienode.MergedNodeSet) *stateUpdate {
 	var (
 		accounts       = make(map[common.Hash][]byte)
 		accountsOrigin = make(map[common.Address][]byte)
@@ -181,26 +180,21 @@ func newStateUpdate(s *StateDB, rawStorageKey bool, originRoot common.Hash, root
 		nodes:          nodes,
 	}
 
-	if sc.diffLayer == nil {
-		log.Info("sc difflayer is nil")
-	} else {
-		log.Info("sc difflayer is not  nil")
-	}
 	if sc.diffLayer != nil {
 		for account, object := range destructsAddrs {
 			sc.diffLayer.Destructs = append(sc.diffLayer.Destructs, account)
 
-			if s.cacheAmongBlocks != nil {
-				obj, exist := s.stateObjects[account]
+			if statedb.cacheAmongBlocks != nil {
+				obj, exist := statedb.stateObjects[account]
 				if !exist {
-					s.cacheAmongBlocks.SetAccount(crypto.Keccak256Hash(account.Bytes()), []byte(""))
+					statedb.cacheAmongBlocks.SetAccount(crypto.Keccak256Hash(account.Bytes()), []byte(""))
 				} else {
-					s.cacheAmongBlocks.SetAccount(obj.addrHash, []byte(""))
+					statedb.cacheAmongBlocks.SetAccount(obj.addrHash, []byte(""))
 				}
 				// if it is a CA account, purge the storage cache to avoid reading dirty storage data
 				if object != nil && obj.Root() != types.EmptyRootHash {
 					SnapshotBlockCacheStoragePurge.Mark(1)
-					s.cacheAmongBlocks.PurgeStorageCache()
+					statedb.cacheAmongBlocks.PurgeStorageCache()
 				}
 			}
 		}
@@ -210,9 +204,8 @@ func newStateUpdate(s *StateDB, rawStorageKey bool, originRoot common.Hash, root
 				Account: accountHash,
 				Blob:    account,
 			})
-			if s.cacheAmongBlocks != nil {
-				s.cacheAmongBlocks.SetAccount(accountHash, account)
-				log.Info("set account in cache among blocks", "account", accountHash)
+			if statedb.cacheAmongBlocks != nil {
+				statedb.cacheAmongBlocks.SetAccount(accountHash, account)
 			}
 		}
 
@@ -222,8 +215,8 @@ func newStateUpdate(s *StateDB, rawStorageKey bool, originRoot common.Hash, root
 			for k, v := range storage {
 				keys = append(keys, k)
 				values = append(values, v)
-				if s.cacheAmongBlocks != nil {
-					s.cacheAmongBlocks.SetStorage(accountHash, k, v)
+				if statedb.cacheAmongBlocks != nil {
+					statedb.cacheAmongBlocks.SetStorage(accountHash, k, v)
 				}
 			}
 			sc.diffLayer.Storages = append(sc.diffLayer.Storages, types.DiffStorage{
@@ -232,25 +225,24 @@ func newStateUpdate(s *StateDB, rawStorageKey bool, originRoot common.Hash, root
 				Vals:    values,
 			})
 		}
-	} else if s.cacheAmongBlocks != nil {
+	} else if statedb.cacheAmongBlocks != nil {
 		for addr, account := range destructsAddrs {
-			obj, exist := s.stateObjects[addr]
+			obj, exist := statedb.stateObjects[addr]
 			if !exist {
-				s.cacheAmongBlocks.SetAccount(crypto.Keccak256Hash(addr.Bytes()), []byte(""))
+				statedb.cacheAmongBlocks.SetAccount(crypto.Keccak256Hash(addr.Bytes()), []byte(""))
 			} else {
-				s.cacheAmongBlocks.SetAccount(obj.addrHash, []byte(""))
+				statedb.cacheAmongBlocks.SetAccount(obj.addrHash, []byte(""))
 			}
 			// if it is a CA account, purge the storage cache to avoid reading dirty storage data
 			if account != nil && account.Root() != types.EmptyRootHash {
 				SnapshotBlockCacheStoragePurge.Mark(1)
-				s.cacheAmongBlocks.PurgeStorageCache()
+				statedb.cacheAmongBlocks.PurgeStorageCache()
 			}
 		}
 
 		for accountHash, account := range sc.accounts {
-			if s.cacheAmongBlocks != nil {
-				s.cacheAmongBlocks.SetAccount(accountHash, account)
-				log.Info("set account in cache among blocks", "account", accountHash)
+			if statedb.cacheAmongBlocks != nil {
+				statedb.cacheAmongBlocks.SetAccount(accountHash, account)
 			}
 		}
 
@@ -260,9 +252,7 @@ func newStateUpdate(s *StateDB, rawStorageKey bool, originRoot common.Hash, root
 			for k, v := range storage {
 				keys = append(keys, k)
 				values = append(values, v)
-				if s.cacheAmongBlocks != nil {
-					s.cacheAmongBlocks.SetStorage(accountHash, k, v)
-				}
+				statedb.cacheAmongBlocks.SetStorage(accountHash, k, v)
 			}
 		}
 	}

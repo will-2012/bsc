@@ -82,7 +82,7 @@ func (c *CacheAmongBlocks) Reset() {
 }
 
 func (c *CacheAmongBlocks) SetRoot(root common.Hash) {
-	log.Info("set new cache among block root", "root", root)
+	//	log.Info("set new cache among block root", "root", root)
 	c.cacheRoot = root
 }
 

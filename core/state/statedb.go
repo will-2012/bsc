@@ -186,7 +186,6 @@ func NewWithCacheAmongBlocks(root common.Hash, db Database, cache *CacheAmongBlo
 
 	statedb.storagePool = NewStoragePool()
 	statedb.cacheAmongBlocks = cache
-	log.Info("set cache among blocks")
 	return statedb, nil
 }
 
@@ -734,7 +733,6 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 			if data == nil {
 				return nil
 			}
-			log.Info("account hit in cache among blocks", "account", addr)
 			acct = &types.StateAccount{
 				Nonce:    data.Nonce,
 				Balance:  data.Balance,
@@ -1512,12 +1510,6 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateU
 	origin := s.originalRoot
 	s.originalRoot = root
 
-	/*
-		if s.cacheAmongBlocks != nil {
-			s.cacheAmongBlocks.SetRoot(root)
-		}
-
-	*/
 	return newStateUpdate(s, noStorageWiping, origin, root, deletes, updates, nodes), nil
 }
 

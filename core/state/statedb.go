@@ -184,6 +184,7 @@ func NewWithCacheAmongBlocks(root common.Hash, db Database, cache *CacheAmongBlo
 		return nil, err
 	}
 
+	statedb.storagePool = NewStoragePool()
 	statedb.cacheAmongBlocks = cache
 	log.Info("set cache among blocks")
 	return statedb, nil

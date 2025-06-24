@@ -167,6 +167,11 @@ func (s *stateObject) getOriginStorage(key common.Hash) (common.Hash, bool) {
 	}
 	// if L1 cache miss, try to get it from shared pool
 	if s.sharedOriginStorage != nil {
+		if s.db.isHertzfix {
+			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
+				return common.Hash{}, false
+			}
+		}
 		val, ok := s.sharedOriginStorage.Load(key)
 		if !ok {
 			return common.Hash{}, false
@@ -224,17 +229,45 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		s.originStorage[key] = common.Hash{} // track the empty slot as origin value
 		return common.Hash{}
 	}
-	s.db.StorageLoaded++
+	// If no live objects are available, attempt to use snapshots
+	var (
+		enc   []byte
+		err   error
+		value common.Hash
+		exist bool
+	)
 
-	var start time.Time
-	if metrics.EnabledExpensive() {
-		start = time.Now()
+	start := time.Now()
+	storageKey := crypto.Keccak256Hash(key.Bytes())
+	// Try to get from cache among blocks if the cache root is the pre-state root
+	if s.db.cacheAmongBlocks != nil && s.db.cacheAmongBlocks.GetRoot() == s.db.originalRoot {
+		enc, exist = s.db.cacheAmongBlocks.GetStorage(s.addrHash, storageKey)
+		if exist {
+			//	log.Info("account hit in cache among blocks")
+			SnapshotBlockCacheStorageHitMeter.Mark(1)
+		} else {
+			SnapshotBlockCacheStorageMissMeter.Mark(1)
+		}
+		if len(enc) > 0 {
+			_, content, _, err := rlp.Split(enc)
+			if err != nil {
+				s.db.setError(err)
+			}
+			value.SetBytes(content)
+		}
 	}
-	value, err := s.db.reader.Storage(s.address, key)
-	if err != nil {
-		s.db.setError(err)
-		return common.Hash{}
+	if !exist {
+		start := time.Now()
+		value, err = s.db.reader.Storage(s.address, key)
+		if s.db.EnablePerf {
+			perfOutSlotTime.UpdateSince(start)
+		}
+		if err != nil {
+			s.db.setError(err)
+			return common.Hash{}
+		}
 	}
+
 	if metrics.EnabledExpensive() {
 		s.db.StorageReads += time.Since(start)
 	}

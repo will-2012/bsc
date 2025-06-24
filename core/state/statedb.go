@@ -81,13 +81,14 @@ func (m *mutation) isDelete() bool {
 // must be created with new root and updated database for accessing post-
 // commit states.
 type StateDB struct {
-	db             Database
-	prefetcherLock sync.Mutex
-	prefetcher     *triePrefetcher
-	trie           Trie
-	noTrie         bool
-	reader         Reader
-
+	db               Database
+	prefetcherLock   sync.Mutex
+	prefetcher       *triePrefetcher
+	trie             Trie
+	noTrie           bool
+	reader           Reader
+	hasher           crypto.KeccakState
+	cacheAmongBlocks *CacheAmongBlocks
 	// originalRoot is the pre-state root, before any changes were made.
 	// It will be updated when the Commit is called.
 	originalRoot common.Hash
@@ -112,8 +113,12 @@ type StateDB struct {
 	// perspective. This map is populated at the transaction boundaries.
 	mutations map[common.Address]*mutation
 
-	storagePool          *StoragePool // sharedPool to store L1 originStorage of stateObjects
+	// before Hertzfix hard fork, read from sharedPool directly, compatible with old erroneous data(https://forum.bnbchain.org/t/about-the-hertzfix/2400).
+	// after Hertzfix hard fork, read from sharedPool which is not in stateObjectsDestruct.
+	isHertzfix           bool
 	writeOnSharedStorage bool         // Write to the shared origin storage of a stateObject while reading from the underlying storage layer.
+	storagePool          *StoragePool // sharedPool to store L1 originStorage of stateObjects
+
 	// DB error.
 	// State objects are used by the consensus core and VM which are
 	// unable to deal with database-level errors. Any error that occurs
@@ -168,6 +173,20 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	EnablePerf bool
+}
+
+// NewWithCacheAmongBlocks creates a new state with a cache which store the data among blocks
+func NewWithCacheAmongBlocks(root common.Hash, db Database, cache *CacheAmongBlocks) (*StateDB, error) {
+	statedb, err := New(root, db)
+	if err != nil {
+		return nil, err
+	}
+
+	statedb.storagePool = NewStoragePool()
+	statedb.cacheAmongBlocks = cache
+	return statedb, nil
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -205,6 +224,7 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 		journal:              newJournal(),
 		accessList:           newAccessList(),
 		transientStorage:     newTransientStorage(),
+		hasher:               crypto.NewKeccakState(),
 	}
 	if db.TrieDB().IsVerkle() {
 		sdb.accessEvents = NewAccessEvents(db.PointCache())
@@ -214,6 +234,10 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 
 func (s *StateDB) EnableWriteOnSharedStorage() {
 	s.writeOnSharedStorage = true
+}
+
+func (s *StateDB) SetIsHertzfix(isHertzfix bool) {
+	s.isHertzfix = isHertzfix
 }
 
 // In mining mode, we will try multi-fillTransactions to get the most profitable one.
@@ -695,14 +719,51 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 	}
 	s.AccountLoaded++
 
-	start := time.Now()
-	acct, err := s.reader.Account(addr)
-	if err != nil {
-		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
-		return nil
+	// If no live objects are available, attempt to use snapshots
+	var err error
+	var exist bool
+	var acct *types.StateAccount
+	var data *types.SlimAccount
+	// Try to get from cache among blocks if the cache root is the pre-state root
+	if s.cacheAmongBlocks != nil && s.cacheAmongBlocks.GetRoot() == s.originalRoot {
+		data, exist = s.cacheAmongBlocks.GetAccount(crypto.HashData(s.hasher, addr.Bytes()))
+		if exist {
+			SnapshotBlockCacheAccountHitMeter.Mark(1)
+			//	log.Info("account hit in cache among blocks")
+			if data == nil {
+				return nil
+			}
+			acct = &types.StateAccount{
+				Nonce:    data.Nonce,
+				Balance:  data.Balance,
+				CodeHash: data.CodeHash,
+				Root:     common.BytesToHash(data.Root),
+			}
+			if len(acct.CodeHash) == 0 {
+				acct.CodeHash = types.EmptyCodeHash.Bytes()
+			}
+			if acct.Root == (common.Hash{}) {
+				acct.Root = types.EmptyRootHash
+			}
+		} else {
+			//	log.Info("account hit in cache among blocks", "account", addr)
+			SnapshotBlockCacheAccountMissMeter.Mark(1)
+		}
+
 	}
-	if metrics.EnabledExpensive() {
-		s.AccountReads += time.Since(start)
+	if !exist {
+		start := time.Now()
+		acct, err = s.reader.Account(addr)
+		if s.EnablePerf {
+			perfOutAccountTime.UpdateSince(start)
+		}
+		if err != nil {
+			s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
+			return nil
+		}
+		if metrics.EnabledExpensive() {
+			s.AccountReads += time.Since(start)
+		}
 	}
 
 	// Short circuit if the account is not found
@@ -794,20 +855,23 @@ func (s *StateDB) copyInternal(doPrefetch bool) *StateDB {
 		mutations:            make(map[common.Address]*mutation, len(s.mutations)),
 		dbErr:                s.dbErr,
 		storagePool:          s.storagePool,
-		// writeOnSharedStorage: s.writeOnSharedStorage,
-		refund:    s.refund,
-		thash:     s.thash,
-		txIndex:   s.txIndex,
-		logs:      make(map[common.Hash][]*types.Log, len(s.logs)),
-		logSize:   s.logSize,
-		preimages: maps.Clone(s.preimages),
+		refund:               s.refund,
+		thash:                s.thash,
+		txIndex:              s.txIndex,
+		logs:                 make(map[common.Hash][]*types.Log, len(s.logs)),
+		logSize:              s.logSize,
+		preimages:            maps.Clone(s.preimages),
 
 		transientStorage: s.transientStorage.Copy(),
 		journal:          s.journal.copy(),
+		hasher:           crypto.NewKeccakState(),
 	}
+
 	if s.witness != nil {
 		state.witness = s.witness.Copy()
 	}
+	state.cacheAmongBlocks = s.cacheAmongBlocks
+
 	// Do we need to copy the access list and transient storage?
 	// In practice: No. At the start of a transaction, these two lists are empty.
 	// In practice, we only ever copy state _between_ transactions/blocks, never
@@ -1249,6 +1313,7 @@ func (s *StateDB) handleDestruction(noStorageWiping bool) (map[common.Hash]*acco
 		op := &accountDelete{
 			address: addr,
 			origin:  types.SlimAccountRLP(*prev),
+			obj:     prevObj,
 		}
 		deletes[addrHash] = op
 
@@ -1445,7 +1510,7 @@ func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool) (*stateU
 	origin := s.originalRoot
 	s.originalRoot = root
 
-	return newStateUpdate(noStorageWiping, origin, root, deletes, updates, nodes), nil
+	return newStateUpdate(s, noStorageWiping, origin, root, deletes, updates, nodes), nil
 }
 
 // commitAndFlush is a wrapper of commit which also commits the state mutations
@@ -1505,6 +1570,9 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 				s.TrieDBCommits += time.Since(start)
 			}
 		}
+	}
+	if s.cacheAmongBlocks != nil {
+		s.cacheAmongBlocks.SetRoot(s.originalRoot)
 	}
 	s.reader, _ = s.db.Reader(s.originalRoot)
 	return ret, err

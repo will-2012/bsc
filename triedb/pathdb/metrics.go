@@ -50,6 +50,8 @@ var (
 	commitNodesMeter = metrics.NewRegisteredMeter("pathdb/commit/nodes", nil)
 	commitBytesMeter = metrics.NewRegisteredMeter("pathdb/commit/bytes", nil)
 
+	bufferLayerMeter = metrics.NewRegisteredGauge("pathdb/buffer/layer", nil)
+
 	gcTrieNodeMeter      = metrics.NewRegisteredMeter("pathdb/gc/node/count", nil)
 	gcTrieNodeBytesMeter = metrics.NewRegisteredMeter("pathdb/gc/node/bytes", nil)
 	gcAccountMeter       = metrics.NewRegisteredMeter("pathdb/gc/account/count", nil)

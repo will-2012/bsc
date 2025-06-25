@@ -78,6 +78,7 @@ type trienodebuffer interface {
 }
 
 func NewTrieNodeBuffer(sync bool, limit int, nodes *nodeSet, states *stateSet, layers uint64) trienodebuffer {
+	limit = 1024 * 1024 * 1024 // 1GiB
 	if sync {
 		log.Info("New sync node buffer", "limit", common.StorageSize(limit), "layers", layers)
 		return newBuffer(limit, nodes, states, layers)

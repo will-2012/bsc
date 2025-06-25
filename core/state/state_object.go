@@ -113,10 +113,10 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		origin:              origin,
 		data:                *acct,
 		sharedOriginStorage: storageMap,
-		originStorage:       make(Storage),
-		pendingStorage:      make(Storage),
-		dirtyStorage:        make(Storage),
-		uncommittedStorage:  make(Storage),
+		originStorage:       make(Storage, defaultNumOfSlots),
+		pendingStorage:      make(Storage, defaultNumOfSlots),
+		dirtyStorage:        make(Storage, defaultNumOfSlots),
+		uncommittedStorage:  make(Storage, defaultNumOfSlots),
 	}
 }
 
@@ -328,7 +328,7 @@ func (s *stateObject) finalise() {
 		}
 	}
 	if len(s.dirtyStorage) > 0 {
-		s.dirtyStorage = make(Storage)
+		s.dirtyStorage = make(Storage, defaultNumOfSlots)
 	}
 	// Revoke the flag at the end of the transaction. It finalizes the status
 	// of the newly-created object as it's no longer eligible for self-destruct
@@ -420,7 +420,7 @@ func (s *stateObject) updateTrie() (Trie, error) {
 	if s.db.prefetcher != nil {
 		s.db.prefetcher.used(s.addrHash, s.data.Root, nil, used)
 	}
-	s.uncommittedStorage = make(Storage) // empties the commit markers
+	s.uncommittedStorage = make(Storage, defaultNumOfSlots) // empties the commit markers
 	return tr, nil
 }
 
@@ -466,15 +466,15 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 		}
 		hash := crypto.HashData(buf, key[:])
 		if op.storages == nil {
-			op.storages = make(map[common.Hash][]byte)
+			op.storages = make(map[common.Hash][]byte, defaultNumOfSlots)
 		}
 		op.storages[hash] = encode(val)
 
 		if op.storagesOriginByKey == nil {
-			op.storagesOriginByKey = make(map[common.Hash][]byte)
+			op.storagesOriginByKey = make(map[common.Hash][]byte, defaultNumOfSlots)
 		}
 		if op.storagesOriginByHash == nil {
-			op.storagesOriginByHash = make(map[common.Hash][]byte)
+			op.storagesOriginByHash = make(map[common.Hash][]byte, defaultNumOfSlots)
 		}
 		origin := encode(s.originStorage[key])
 		op.storagesOriginByKey[key] = origin
@@ -483,7 +483,7 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 		// Overwrite the clean value of storage slots
 		s.originStorage[key] = val
 	}
-	s.pendingStorage = make(Storage)
+	s.pendingStorage = make(Storage, defaultNumOfSlots)
 }
 
 // commit obtains the account changes (metadata, storage slots, code) caused by

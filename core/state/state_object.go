@@ -193,8 +193,20 @@ func (s *stateObject) setOriginStorage(key common.Hash, value common.Hash) {
 // GetState retrieves a value from the committed account storage trie.
 // GetState retrieves a value associated with the given storage key.
 func (s *stateObject) GetState(key common.Hash) common.Hash {
-	value, _ := s.getState(key)
-	return value
+	// value, _ := s.getState(key)
+	// return value
+	return s.getNewState(key)
+}
+
+// getState retrieves a value associated with the given storage key, along with
+// its original value.
+func (s *stateObject) getNewState(key common.Hash) common.Hash {
+	value, dirty := s.dirtyStorage[key]
+	if dirty {
+		return value
+	}
+	origin := s.GetCommittedState(key)
+	return origin
 }
 
 // getState retrieves a value associated with the given storage key, along with

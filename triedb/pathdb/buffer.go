@@ -155,6 +155,7 @@ func (b *buffer) flush(db ethdb.KeyValueStore, freezer ethdb.AncientWriter, node
 			return err
 		}
 	}
+	log.Info("Persisted buffer content", "bytes", common.StorageSize(b.limit), "layer_number", b.layers)
 	nodes := b.nodes.write(db, nodesCache)
 	rawdb.WritePersistentStateID(db, id)
 

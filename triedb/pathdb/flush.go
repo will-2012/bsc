@@ -21,6 +21,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 )
 
@@ -37,6 +38,11 @@ func nodeCacheKey(owner common.Hash, path []byte) []byte {
 // Note this function will also inject all the newly written nodes
 // into clean cache.
 func writeNodes(batch ethdb.KeyValueWriter, nodes map[common.Hash]map[string]*trienode.Node, clean *fastcache.Cache) (total int) {
+	total_tmp := 0
+	for _, subset := range nodes {
+		total_tmp += len(subset)
+	}
+	log.Info("writeNodes", "total", total_tmp)
 	for owner, subset := range nodes {
 		for path, n := range subset {
 			if n.IsDeleted() {

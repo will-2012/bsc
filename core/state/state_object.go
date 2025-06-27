@@ -113,10 +113,10 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		origin:              origin,
 		data:                *acct,
 		sharedOriginStorage: storageMap,
-		originStorage:       make(Storage),
-		pendingStorage:      make(Storage),
-		dirtyStorage:        make(Storage),
-		uncommittedStorage:  make(Storage),
+		originStorage:       make(Storage, defaultNumOfSlots),
+		pendingStorage:      make(Storage, defaultNumOfSlots),
+		dirtyStorage:        make(Storage, defaultNumOfSlots),
+		uncommittedStorage:  make(Storage, defaultNumOfSlots),
 	}
 }
 
@@ -167,6 +167,11 @@ func (s *stateObject) getOriginStorage(key common.Hash) (common.Hash, bool) {
 	}
 	// if L1 cache miss, try to get it from shared pool
 	if s.sharedOriginStorage != nil {
+		if s.db.isHertzfix {
+			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
+				return common.Hash{}, false
+			}
+		}
 		val, ok := s.sharedOriginStorage.Load(key)
 		if !ok {
 			return common.Hash{}, false
@@ -188,8 +193,20 @@ func (s *stateObject) setOriginStorage(key common.Hash, value common.Hash) {
 // GetState retrieves a value from the committed account storage trie.
 // GetState retrieves a value associated with the given storage key.
 func (s *stateObject) GetState(key common.Hash) common.Hash {
-	value, _ := s.getState(key)
-	return value
+	// value, _ := s.getState(key)
+	// return value
+	return s.getNewState(key)
+}
+
+// getState retrieves a value associated with the given storage key, along with
+// its original value.
+func (s *stateObject) getNewState(key common.Hash) common.Hash {
+	value, dirty := s.dirtyStorage[key]
+	if dirty {
+		return value
+	}
+	origin := s.GetCommittedState(key)
+	return origin
 }
 
 // getState retrieves a value associated with the given storage key, along with
@@ -226,11 +243,15 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 	s.db.StorageLoaded++
 
-	var start time.Time
-	if metrics.EnabledExpensive() {
-		start = time.Now()
-	}
+	//var start time.Time
+	// if metrics.EnabledExpensive() {
+	// 	start = time.Now()
+	// }
+	start := time.Now()
 	value, err := s.db.reader.Storage(s.address, key)
+	if s.db.EnablePerf {
+		perfOutSlotTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}
@@ -307,7 +328,7 @@ func (s *stateObject) finalise() {
 		}
 	}
 	if len(s.dirtyStorage) > 0 {
-		s.dirtyStorage = make(Storage)
+		s.dirtyStorage = make(Storage, defaultNumOfSlots)
 	}
 	// Revoke the flag at the end of the transaction. It finalizes the status
 	// of the newly-created object as it's no longer eligible for self-destruct
@@ -399,7 +420,7 @@ func (s *stateObject) updateTrie() (Trie, error) {
 	if s.db.prefetcher != nil {
 		s.db.prefetcher.used(s.addrHash, s.data.Root, nil, used)
 	}
-	s.uncommittedStorage = make(Storage) // empties the commit markers
+	s.uncommittedStorage = make(Storage, defaultNumOfSlots) // empties the commit markers
 	return tr, nil
 }
 
@@ -445,15 +466,15 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 		}
 		hash := crypto.HashData(buf, key[:])
 		if op.storages == nil {
-			op.storages = make(map[common.Hash][]byte)
+			op.storages = make(map[common.Hash][]byte, defaultNumOfSlots)
 		}
 		op.storages[hash] = encode(val)
 
 		if op.storagesOriginByKey == nil {
-			op.storagesOriginByKey = make(map[common.Hash][]byte)
+			op.storagesOriginByKey = make(map[common.Hash][]byte, defaultNumOfSlots)
 		}
 		if op.storagesOriginByHash == nil {
-			op.storagesOriginByHash = make(map[common.Hash][]byte)
+			op.storagesOriginByHash = make(map[common.Hash][]byte, defaultNumOfSlots)
 		}
 		origin := encode(s.originStorage[key])
 		op.storagesOriginByKey[key] = origin
@@ -462,7 +483,7 @@ func (s *stateObject) commitStorage(op *accountUpdate) {
 		// Overwrite the clean value of storage slots
 		s.originStorage[key] = val
 	}
-	s.pendingStorage = make(Storage)
+	s.pendingStorage = make(Storage, defaultNumOfSlots)
 }
 
 // commit obtains the account changes (metadata, storage slots, code) caused by

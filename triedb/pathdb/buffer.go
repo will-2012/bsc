@@ -74,7 +74,7 @@ func (b *buffer) node(owner common.Hash, path []byte) (*trienode.Node, bool) {
 // commit merges the provided states and trie nodes into the buffer.
 func (b *buffer) commit(nodes *nodeSet, states *stateSet) trienodebuffer {
 	b.layers++
-	log.Info("debug_print", "layers", b.layers, "limit", b.limit)
+	log.Info("debug_print", "layers", b.layers, "limit", b.limit, "size", b.size())
 	b.nodes.merge(nodes)
 	total_tmp := 0
 	for _, subset := range b.nodes.nodes {

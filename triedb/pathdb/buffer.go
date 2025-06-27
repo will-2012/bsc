@@ -74,7 +74,13 @@ func (b *buffer) node(owner common.Hash, path []byte) (*trienode.Node, bool) {
 // commit merges the provided states and trie nodes into the buffer.
 func (b *buffer) commit(nodes *nodeSet, states *stateSet) trienodebuffer {
 	b.layers++
+	log.Info("debug_print", "layers", b.layers, "limit", b.limit, "size", b.size())
 	b.nodes.merge(nodes)
+	total_tmp := 0
+	for _, subset := range b.nodes.nodes {
+		total_tmp += len(subset)
+	}
+	log.Info("debug_print", "nodes", total_tmp)
 	b.states.merge(states)
 	return b
 }
@@ -143,7 +149,7 @@ func (b *buffer) flush(db ethdb.KeyValueStore, freezer ethdb.AncientWriter, node
 	// Terminate the state snapshot generation if it's active
 	var (
 		start = time.Now()
-		batch = db.NewBatchWithSize(b.nodes.dbsize() * 11 / 10) // extra 10% for potential pebble internal stuff
+		//batch = db.NewBatchWithSize(b.nodes.dbsize() * 11 / 10) // extra 10% for potential pebble internal stuff
 	)
 	// Explicitly sync the state freezer to ensure all written data is persisted to disk
 	// before updating the key-value store.
@@ -155,19 +161,21 @@ func (b *buffer) flush(db ethdb.KeyValueStore, freezer ethdb.AncientWriter, node
 			return err
 		}
 	}
-	nodes := b.nodes.write(batch, nodesCache)
-	rawdb.WritePersistentStateID(batch, id)
+	log.Info("Persisted buffer content", "bytes", common.StorageSize(b.limit), "layer_number", b.layers)
+	nodes := b.nodes.write(db, nodesCache)
+	rawdb.WritePersistentStateID(db, id)
 
 	// Flush all mutations in a single batch
-	size := batch.ValueSize()
-	if err := batch.Write(); err != nil {
-		return err
-	}
-	commitBytesMeter.Mark(int64(size))
+	// size := batch.ValueSize()
+	// if err := batch.Write(); err != nil {
+	// 	return err
+	// }
+	//commitBytesMeter.Mark(int64(size))
 	commitNodesMeter.Mark(int64(nodes))
 	commitTimeTimer.UpdateSince(start)
+	bufferLayerMeter.Update(int64(b.layers))
+	log.Info("Persisted buffer content", "nodes", nodes, "bytes", common.StorageSize(b.limit), "layer_number", b.layers, "elapsed", common.PrettyDuration(time.Since(start)))
 	b.reset()
-	log.Debug("Persisted buffer content", "nodes", nodes, "bytes", common.StorageSize(size), "elapsed", common.PrettyDuration(time.Since(start)))
 	return nil
 }
 

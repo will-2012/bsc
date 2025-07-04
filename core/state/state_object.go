@@ -169,7 +169,6 @@ func (s *stateObject) tryGetFromSharedPool(key common.Hash) (common.Hash, bool) 
 			return common.Hash{}, false
 		}
 		storage := val.(common.Hash)
-		log.Info("tryGetFromSharedPool: true", "key", key, "value", storage)
 		return storage, true
 	}
 	return common.Hash{}, false
@@ -215,9 +214,6 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	if s.db.needBadSharedStorage {
 		// keep compatible with old erroneous data(https://forum.bnbchain.org/t/about-the-hertzfix/2400).
 		if value, cached := s.tryGetFromSharedPool(key); cached {
-			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
-				log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)
-			}
 			s.originStorage[key] = value
 			return value
 		}

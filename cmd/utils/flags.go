@@ -571,7 +571,7 @@ var (
 	}
 	CacheEnableSharedStorageFlag = &cli.BoolFlag{
 		Name:     "cache.enablesharedpool",
-		Usage:    "Enable shared storage pool cache, default is false",
+		Usage:    "Enable shared storage pool cache in statedb, default is false",
 		Value:    false,
 		Category: flags.PerfCategory,
 	}

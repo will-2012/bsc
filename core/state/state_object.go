@@ -213,6 +213,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 
 	if s.db.needBadSharedStorage {
+		// keep compatible with old erroneous data(https://forum.bnbchain.org/t/about-the-hertzfix/2400).
 		if value, cached := s.tryGetFromSharedPool(key); cached {
 			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
 				log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)

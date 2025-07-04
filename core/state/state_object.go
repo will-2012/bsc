@@ -188,7 +188,7 @@ func (s *stateObject) setOriginStorage(key common.Hash, value common.Hash) {
 // GetState retrieves a value from the committed account storage trie.
 // GetState retrieves a value associated with the given storage key.
 func (s *stateObject) GetState(key common.Hash) common.Hash {
-	value, _ := s.getState(key)
+	value, _ := s.getState(key) // ?? provide updated value api
 	return value
 }
 
@@ -226,11 +226,15 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 	s.db.StorageLoaded++
 
-	var start time.Time
-	if metrics.EnabledExpensive() {
-		start = time.Now()
-	}
+	//var start time.Time
+	// if metrics.EnabledExpensive() {
+	// 	start = time.Now()
+	// }
+	start := time.Now()
 	value, err := s.db.reader.Storage(s.address, key)
+	if s.db.EnablePerf {
+		perfOutSlotTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.db.setError(err)
 		return common.Hash{}

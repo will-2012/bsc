@@ -97,7 +97,7 @@ type StateDB struct {
 
 	// This map holds 'live' objects, which will get modified while
 	// processing a state transition.
-	stateObjects map[common.Address]*stateObject
+	stateObjects map[common.Address]*stateObject // 2?
 
 	// This map holds 'deleted' objects. An object with the same address
 	// might also occur in the 'stateObjects' map due to account
@@ -168,6 +168,8 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	EnablePerf bool
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -697,6 +699,9 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 
 	start := time.Now()
 	acct, err := s.reader.Account(addr)
+	if s.EnablePerf {
+		perfOutAccountTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 		return nil

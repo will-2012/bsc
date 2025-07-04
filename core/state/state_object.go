@@ -169,7 +169,7 @@ func (s *stateObject) tryGetFromSharedPool(key common.Hash) (common.Hash, bool) 
 			return common.Hash{}, false
 		}
 		storage := val.(common.Hash)
-		s.originStorage[key] = storage
+		//s.originStorage[key] = storage
 		return storage, true
 	}
 	return common.Hash{}, false
@@ -230,6 +230,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 	}
 
 	if value, cached := s.tryGetFromSharedPool(key); cached {
+		s.originStorage[key] = value
 		return value
 	}
 

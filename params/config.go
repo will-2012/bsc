@@ -970,12 +970,12 @@ func (c *ChainConfig) IsHertzfix(num *big.Int) bool {
 
 func (c *ChainConfig) NeedBadSharedStorage(num *big.Int) bool {
 	if c.IsHertzfix(num) {
-		log.Info("NeedBadSharedStorage: false", "num", num)
+		log.Info("is hertzfixNeedBadSharedStorage: false", "num", num)
 		return false
 	}
 
 	if c.ChainID.Cmp(big.NewInt(56)) == 0 && num.Cmp(big.NewInt(33851236)) == 0 {
-		log.Info("NeedBadSharedStorage: true", "num", num)
+		log.Info("is 33851236, NeedBadSharedStorage: true", "num", num)
 		return true
 	}
 

@@ -23,6 +23,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params/forks"
 )
 
@@ -969,17 +970,21 @@ func (c *ChainConfig) IsHertzfix(num *big.Int) bool {
 
 func (c *ChainConfig) NeedBadSharedStorage(num *big.Int) bool {
 	if c.IsHertzfix(num) {
+		log.Info("NeedBadSharedStorage: false", "num", num)
 		return false
 	}
 
 	if c.ChainID.Cmp(big.NewInt(56)) == 0 && num.Cmp(big.NewInt(33851236)) == 0 {
+		log.Info("NeedBadSharedStorage: true", "num", num)
 		return true
 	}
 
 	if c.ChainID.Cmp(big.NewInt(97)) == 0 && (num.Cmp(big.NewInt(35547779)) == 0 || num.Cmp(big.NewInt(35548081)) == 0) {
+		log.Info("NeedBadSharedStorage: true", "num", num)
 		return true
 	}
 
+	log.Info("NeedBadSharedStorage: false", "num", num)
 	return false
 }
 

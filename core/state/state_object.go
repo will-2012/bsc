@@ -225,23 +225,23 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return value
 	}
 
-	if value, cached := s.getOriginStorageTmp(key); cached {
-		return value
-	}
-
-	// if value, cached := s.originStorage[key]; cached {
+	// if value, cached := s.getOriginStorageTmp(key); cached {
 	// 	return value
 	// }
 
+	if value, cached := s.originStorage[key]; cached {
+		return value
+	}
+
 	// if s.db.needBadSharedStorage {
 	// 	// keep compatible with old erroneous data(https://forum.bnbchain.org/t/about-the-hertzfix/2400).
-	// 	if value, cached := s.tryGetFromSharedPool(key); cached {
-	// 		if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
-	// 			log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)
-	// 		}
-	// 		s.originStorage[key] = value
-	// 		return value
-	// 	}
+	if value, cached := s.tryGetFromSharedPool(key); cached {
+		if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
+			log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)
+		}
+		s.originStorage[key] = value
+		return value
+	}
 	// }
 
 	// If the object was destructed in *this* block (and potentially resurrected),

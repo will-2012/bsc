@@ -225,6 +225,7 @@ func (s *StateDB) SetNeedBadSharedStorage(needBadSharedStorage bool) {
 	if needBadSharedStorage {
 		s.writeOnSharedStorage = true
 	}
+	log.Info("SetNeedBadSharedStorage", "needBadSharedStorage", needBadSharedStorage, "writeOnSharedStorage", s.writeOnSharedStorage)
 }
 
 // In mining mode, we will try multi-fillTransactions to get the most profitable one.

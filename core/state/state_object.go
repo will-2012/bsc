@@ -200,23 +200,6 @@ func (s *stateObject) getState(key common.Hash) (common.Hash, common.Hash) {
 	return origin, origin
 }
 
-func (s *stateObject) getOriginStorageTmp(key common.Hash) (common.Hash, bool) {
-	if value, cached := s.originStorage[key]; cached {
-		return value, true
-	}
-	// if L1 cache miss, try to get it from shared pool
-	if s.sharedOriginStorage != nil {
-		val, ok := s.sharedOriginStorage.Load(key)
-		if !ok {
-			return common.Hash{}, false
-		}
-		storage := val.(common.Hash)
-		s.originStorage[key] = storage
-		return storage, true
-	}
-	return common.Hash{}, false
-}
-
 // GetCommittedState retrieves the value associated with the specific key
 // without any mutations caused in the current execution.
 func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
@@ -225,24 +208,20 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return value
 	}
 
-	// if value, cached := s.getOriginStorageTmp(key); cached {
-	// 	return value
-	// }
-
 	if value, cached := s.originStorage[key]; cached {
 		return value
 	}
 
-	// if s.db.needBadSharedStorage {
-	// 	// keep compatible with old erroneous data(https://forum.bnbchain.org/t/about-the-hertzfix/2400).
-	if value, cached := s.tryGetFromSharedPool(key); cached {
-		if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
-			log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)
+	if s.db.needBadSharedStorage {
+		// keep compatible with old erroneous data(https://forum.bnbchain.org/t/about-the-hertzfix/2400).
+		if value, cached := s.tryGetFromSharedPool(key); cached {
+			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
+				log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)
+			}
+			s.originStorage[key] = value
+			return value
 		}
-		s.originStorage[key] = value
-		return value
 	}
-	// }
 
 	// If the object was destructed in *this* block (and potentially resurrected),
 	// the storage has been cleared out, and we should *not* consult the previous
@@ -255,12 +234,12 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 		return common.Hash{}
 	}
 
-	// if !s.db.needBadSharedStorage {
-	// 	if value, cached := s.tryGetFromSharedPool(key); cached {
-	// 		s.originStorage[key] = value
-	// 		return value
-	// 	}
-	// }
+	if !s.db.needBadSharedStorage {
+		if value, cached := s.tryGetFromSharedPool(key); cached {
+			s.originStorage[key] = value
+			return value
+		}
+	}
 
 	s.db.StorageLoaded++
 

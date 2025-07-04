@@ -2187,6 +2187,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 			return nil, it.index, err
 		}
 		statedb.EnableSharedStorage(bc.cacheConfig.EnableSharedStorage)
+		statedb.SetNeedBadSharedStorage(bc.chainConfig.NeedBadSharedStorage(block.Number()))
 		bc.updateHighestVerifiedHeader(block.Header())
 
 		// If we are past Byzantium, enable prefetching to pull in trie node paths

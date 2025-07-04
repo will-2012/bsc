@@ -214,6 +214,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 
 	if s.db.needBadSharedStorage {
 		if value, cached := s.tryGetFromSharedPool(key); cached {
+			s.originStorage[key] = value
 			return value
 		}
 	}

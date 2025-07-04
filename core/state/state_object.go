@@ -166,12 +166,15 @@ func (s *stateObject) tryGetFromSharedPool(key common.Hash) (common.Hash, bool) 
 	if s.sharedOriginStorage != nil {
 		val, ok := s.sharedOriginStorage.Load(key)
 		if !ok {
+			log.Info("tryGetFromSharedPool: false", "key", key)
 			return common.Hash{}, false
 		}
 		storage := val.(common.Hash)
 		//s.originStorage[key] = storage
+		log.Info("tryGetFromSharedPool: true", "key", key)
 		return storage, true
 	}
+	log.Info("tryGetFromSharedPool: false", "key", key)
 	return common.Hash{}, false
 }
 

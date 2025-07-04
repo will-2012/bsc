@@ -166,7 +166,7 @@ func (s *stateObject) tryGetFromSharedPool(key common.Hash) (common.Hash, bool) 
 	if s.sharedOriginStorage != nil {
 		val, ok := s.sharedOriginStorage.Load(key)
 		if !ok {
-			log.Info("tryGetFromSharedPool: false", "key", key)
+			//log.Info("tryGetFromSharedPool: false", "key", key)
 			return common.Hash{}, false
 		}
 		storage := val.(common.Hash)
@@ -174,7 +174,7 @@ func (s *stateObject) tryGetFromSharedPool(key common.Hash) (common.Hash, bool) 
 		log.Info("tryGetFromSharedPool: true", "key", key)
 		return storage, true
 	}
-	log.Info("tryGetFromSharedPool: false", "key", key)
+	//log.Info("tryGetFromSharedPool: false", "key", key)
 	return common.Hash{}, false
 }
 
@@ -217,6 +217,9 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 
 	if s.db.needBadSharedStorage {
 		if value, cached := s.tryGetFromSharedPool(key); cached {
+			if _, destructed := s.db.stateObjectsDestruct[s.address]; destructed {
+				log.Info("tryGetFromSharedPool: load wrong destructed account", "key", key, "value", value, "account", s.address)
+			}
 			s.originStorage[key] = value
 			return value
 		}

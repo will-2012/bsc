@@ -220,7 +220,7 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 
 func (s *StateDB) EnableSharedStorage(enableSharedStorage bool) {
 	s.writeOnSharedStorage = enableSharedStorage
-	log.Info("EnableSharedStorage", "enableSharedStorage", enableSharedStorage, "writeOnSharedStorage", s.writeOnSharedStorage)
+	//log.Info("EnableSharedStorage", "enableSharedStorage", enableSharedStorage, "writeOnSharedStorage", s.writeOnSharedStorage)
 }
 
 func (s *StateDB) SetNeedBadSharedStorage(needBadSharedStorage bool) {

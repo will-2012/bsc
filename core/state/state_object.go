@@ -232,6 +232,7 @@ func (s *stateObject) GetCommittedState(key common.Hash) common.Hash {
 
 	if value, cached := s.tryGetFromSharedPool(key); cached {
 		s.originStorage[key] = value
+		log.Info("tryGetFromSharedPool: true", "key", key, "value", value)
 		return value
 	}
 

@@ -106,11 +106,11 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		storageMap = db.GetStorage(address)
 	}
 
-	if storageMap != nil {
-		log.Info("storageMap: not nil", "address", address)
-	} else {
-		log.Info("storageMap: nil", "address", address)
-	}
+	// if storageMap != nil {
+	// 	log.Info("storageMap: not nil", "address", address)
+	// } else {
+	// 	log.Info("storageMap: nil", "address", address)
+	// }
 	return &stateObject{
 		db:                  db,
 		address:             address,
@@ -182,6 +182,9 @@ func (s *stateObject) tryGetFromSharedPool(key common.Hash) (common.Hash, bool) 
 func (s *stateObject) setOriginStorage(key common.Hash, value common.Hash) {
 	if s.db.writeOnSharedStorage && s.sharedOriginStorage != nil {
 		s.sharedOriginStorage.Store(key, value)
+		log.Info("setOriginStorage: true", "key", key, "value", value)
+	} else {
+		log.Info("setOriginStorage: false", "key", key, "value", value, "writeOnSharedStorage", s.db.writeOnSharedStorage)
 	}
 	s.originStorage[key] = value
 }

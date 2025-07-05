@@ -305,6 +305,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			EnablePreimageRecording: config.EnablePreimageRecording,
 		}
 		cacheConfig = &core.CacheConfig{
+			// here
+			EnableSharedStorage: config.EnableSharedStorage,
 			TrieCleanLimit:      config.TrieCleanCache,
 			TrieCleanNoPrefetch: config.NoPrefetch,
 			TrieDirtyLimit:      config.TrieDirtyCache,

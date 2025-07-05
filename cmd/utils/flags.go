@@ -2140,6 +2140,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		cfg.EnableSharedStorage = true
 		log.Info("Enabled shared storage pool cache")
 	} else {
+		cfg.EnableSharedStorage = false
 		log.Info("Disabled shared storage pool cache")
 	}
 	if ctx.IsSet(CacheLogSizeFlag.Name) {

@@ -187,7 +187,8 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		"state_scheme", config.StateScheme,
 		"trie_clean_cache", common.StorageSize(config.TrieCleanCache)*1024*1024,
 		"trie_dirty_cache", common.StorageSize(config.TrieDirtyCache)*1024*1024,
-		"snapshot_cache", common.StorageSize(config.SnapshotCache)*1024*1024)
+		"snapshot_cache", common.StorageSize(config.SnapshotCache)*1024*1024,
+		"enable_shared_cache", config.EnableSharedStorage)
 	// Try to recover offline state pruning only in hash-based.
 	if config.StateScheme == rawdb.HashScheme {
 		if err := pruner.RecoverPruning(stack.ResolvePath(""), chainDb, config.TriesInMemory); err != nil {

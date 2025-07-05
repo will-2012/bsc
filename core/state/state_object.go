@@ -106,6 +106,11 @@ func newObject(db *StateDB, address common.Address, acct *types.StateAccount) *s
 		storageMap = db.GetStorage(address)
 	}
 
+	if storageMap != nil {
+		log.Info("storageMap: not nil", "address", address)
+	} else {
+		log.Info("storageMap: nil", "address", address)
+	}
 	return &stateObject{
 		db:                  db,
 		address:             address,

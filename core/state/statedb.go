@@ -168,6 +168,8 @@ type StateDB struct {
 	StorageLoaded  int          // Number of storage slots retrieved from the database during the state transition
 	StorageUpdated atomic.Int64 // Number of storage slots updated during the state transition
 	StorageDeleted atomic.Int64 // Number of storage slots deleted during the state transition
+
+	EnablePerf bool
 }
 
 // NewWithSharedPool creates a new state with sharedStorge on layer 1.5
@@ -200,6 +202,33 @@ func New(root common.Hash, db Database) (*StateDB, error) {
 		stateObjects:         make(map[common.Address]*stateObject, defaultNumOfSlots),
 		stateObjectsDestruct: make(map[common.Address]*stateObject, defaultNumOfSlots),
 		mutations:            make(map[common.Address]*mutation, defaultNumOfSlots),
+		logs:                 make(map[common.Hash][]*types.Log),
+		preimages:            make(map[common.Hash][]byte),
+		journal:              newJournal(),
+		accessList:           newAccessList(),
+		transientStorage:     newTransientStorage(),
+	}
+	if db.TrieDB().IsVerkle() {
+		sdb.accessEvents = NewAccessEvents(db.PointCache())
+	}
+	return sdb, nil
+}
+
+// NewWithReader creates a new state for the specified state root. Unlike New,
+// this function accepts an additional Reader which is bound to the given root.
+func NewWithReader(root common.Hash, db Database, reader Reader) (*StateDB, error) {
+	tr, err := db.OpenTrie(root)
+	if err != nil {
+		return nil, err
+	}
+	sdb := &StateDB{
+		db:                   db,
+		trie:                 tr,
+		originalRoot:         root,
+		reader:               reader,
+		stateObjects:         make(map[common.Address]*stateObject),
+		stateObjectsDestruct: make(map[common.Address]*stateObject),
+		mutations:            make(map[common.Address]*mutation),
 		logs:                 make(map[common.Hash][]*types.Log),
 		preimages:            make(map[common.Hash][]byte),
 		journal:              newJournal(),
@@ -499,6 +528,12 @@ func (s *StateDB) Database() Database {
 	return s.db
 }
 
+// Reader retrieves the low level database reader supporting the
+// lower level operations.
+func (s *StateDB) Reader() Reader {
+	return s.reader
+}
+
 func (s *StateDB) HasSelfDestructed(addr common.Address) bool {
 	stateObject := s.getStateObject(addr)
 	if stateObject != nil {
@@ -697,6 +732,9 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 
 	start := time.Now()
 	acct, err := s.reader.Account(addr)
+	if s.EnablePerf {
+		perfOutAccountTime.UpdateSince(start)
+	}
 	if err != nil {
 		s.setError(fmt.Errorf("getStateObject (%x) error: %w", addr.Bytes(), err))
 		return nil

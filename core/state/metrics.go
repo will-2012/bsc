@@ -29,4 +29,10 @@ var (
 	storageTriesUpdatedMeter = metrics.NewRegisteredMeter("state/update/storagenodes", nil)
 	accountTrieDeletedMeter  = metrics.NewRegisteredMeter("state/delete/accountnodes", nil)
 	storageTriesDeletedMeter = metrics.NewRegisteredMeter("state/delete/storagenodes", nil)
+
+	perfOutAccountTime = metrics.NewRegisteredTimer("perf/out/account/time", nil)
+	perfOutSlotTime    = metrics.NewRegisteredTimer("perf/out/slot/time", nil)
+
+	perfCacheAccountTime = metrics.NewRegisteredTimer("perf/cache/account/time", nil)
+	perfCacheSlotTime    = metrics.NewRegisteredTimer("perf/cache/slot/time", nil)
 )

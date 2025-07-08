@@ -2181,11 +2181,24 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 			parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
 		}
 
-		statedb, err := state.NewWithSharedPool(parent.Root, bc.statedb)
+		// statedb, err := state.NewWithSharedPool(parent.Root, bc.statedb)
+		// if err != nil {
+		// 	return nil, it.index, err
+		// }
+		bc.updateHighestVerifiedHeader(block.Header())
+
+		reader, err := bc.statedb.ReaderWithCache(parent.Root)
 		if err != nil {
 			return nil, it.index, err
 		}
-		bc.updateHighestVerifiedHeader(block.Header())
+		throwaway, err := state.NewWithReader(parent.Root, bc.statedb, reader)
+		if err != nil {
+			return nil, it.index, err
+		}
+		statedb, err := state.NewWithReader(parent.Root, bc.statedb, reader)
+		if err != nil {
+			return nil, it.index, err
+		}
 
 		// If we are past Byzantium, enable prefetching to pull in trie node paths
 		// while processing transactions. Before Byzantium the prefetcher is mostly
@@ -2208,7 +2221,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool, makeWitness 
 		if !bc.cacheConfig.TrieCleanNoPrefetch && len(block.Transactions()) >= prefetchTxNumber {
 			// do Prefetch in a separate goroutine to avoid blocking the critical path
 			// 1.do state prefetch for snapshot cache
-			throwaway := statedb.CopyDoPrefetch()
+			//throwaway := statedb.CopyDoPrefetch()
 			// Disable tracing for prefetcher executions.
 			vmCfg := bc.vmConfig
 			vmCfg.Tracer = nil

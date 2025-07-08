@@ -17,6 +17,9 @@
 package core
 
 import (
+	"bytes"
+
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -48,6 +51,7 @@ func NewStatePrefetcher(config *params.ChainConfig, chain *HeaderChain) *statePr
 func (p *statePrefetcher) Prefetch(transactions types.Transactions, header *types.Header, gasLimit uint64, statedb *state.StateDB, cfg *vm.Config, interruptCh <-chan struct{}) {
 	var (
 		signer = types.MakeSigner(p.config, header.Number, header.Time)
+		reader = statedb.Reader()
 	)
 	txChan := make(chan int, prefetchThread)
 
@@ -65,6 +69,29 @@ func (p *statePrefetcher) Prefetch(transactions types.Transactions, header *type
 				select {
 				case txIndex := <-txChan:
 					tx := transactions[txIndex]
+					// Preload the touched accounts and storage slots in advance
+					sender, err := types.Sender(signer, tx)
+					if err != nil {
+						continue
+					}
+					reader.Account(sender)
+
+					if tx.To() != nil {
+						account, _ := reader.Account(*tx.To())
+
+						// Preload the contract code if the destination has non-empty code
+						if account != nil && !bytes.Equal(account.CodeHash, types.EmptyCodeHash.Bytes()) {
+							reader.Code(*tx.To(), common.BytesToHash(account.CodeHash))
+						}
+					}
+					for _, list := range tx.AccessList() {
+						reader.Account(list.Address)
+						if len(list.StorageKeys) > 0 {
+							for _, slot := range list.StorageKeys {
+								reader.Storage(list.Address, slot)
+							}
+						}
+					}
 					// Convert the transaction into an executable message and pre-cache its sender
 					msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 					if err != nil {

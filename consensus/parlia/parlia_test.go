@@ -696,7 +696,7 @@ func TestParlia_applyTransactionTracing(t *testing.T) {
 
 	msg := engine.getSystemMessage(genesisBlock.Coinbase(), common.HexToAddress(systemcontracts.ValidatorContract), data, common.Big0)
 	nonce := stateDB.GetNonce(msg.From)
-	expectedTx := types.NewTransaction(nonce, *msg.To, msg.Value, msg.GasLimit, msg.GasPrice, msg.Data)
+	expectedTx := types.NewTransaction(nonce, *msg.To, msg.Value.ToBig(), msg.GasLimit, msg.GasPrice.ToBig(), msg.Data)
 
 	receivedTxs := []*types.Transaction{expectedTx}
 	txs := make([]*types.Transaction, 0, 1)
@@ -779,7 +779,7 @@ func TestParlia_applyTransactionModes(t *testing.T) {
 	}
 	expectedTx := func(stateDB *state.StateDB) *types.Transaction {
 		nonce := stateDB.GetNonce(msg.From)
-		return types.NewTransaction(nonce, *msg.To, msg.Value, msg.GasLimit, msg.GasPrice, msg.Data)
+		return types.NewTransaction(nonce, *msg.To, msg.Value.ToBig(), msg.GasLimit, msg.GasPrice.ToBig(), msg.Data)
 	}
 	apply := func(t *testing.T, stateDB *state.StateDB, receivedTxs *[]*types.Transaction, mode systemTxMode) ([]*types.Transaction, error) {
 		t.Helper()

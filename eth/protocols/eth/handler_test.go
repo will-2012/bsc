@@ -595,22 +595,13 @@ func testGetBlockReceipts(t *testing.T, protocol uint) {
 	// Collect the hashes to request, and the response to expect
 	var (
 		hashes   []common.Hash
-<<<<<<< HEAD
-		receipts rlp.RawList[*ReceiptList68]
-=======
 		receipts rlp.RawList[*ReceiptList]
->>>>>>> geth-v1.17.3
 	)
 	for i := uint64(0); i <= backend.chain.CurrentBlock().Number.Uint64(); i++ {
 		block := backend.chain.GetBlockByNumber(i)
 		hashes = append(hashes, block.Hash())
-<<<<<<< HEAD
-		trs := backend.chain.GetReceiptsByHash(block.Hash())
-		receipts.Append(NewReceiptList68(trs))
-=======
 		br := backend.chain.GetReceiptsByHash(block.Hash())
 		receipts.Append(NewReceiptList(br))
->>>>>>> geth-v1.17.3
 	}
 
 	// Send the hash request and verify the response

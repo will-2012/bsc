@@ -333,10 +333,15 @@ loop:
 			if have, want := msg.ForkID, chain.ForkID(); !reflect.DeepEqual(have, want) {
 				return fmt.Errorf("wrong fork ID in status: have %v, want %v", have, want)
 			}
+			matched := false
 			for _, cap := range c.caps {
 				if cap.Name == "eth" && cap.Version == uint(msg.ProtocolVersion) {
-					break loop
+					matched = true
+					break
 				}
+			}
+			if !matched {
+				return fmt.Errorf("wrong protocol version: have %v, want %v", msg.ProtocolVersion, c.caps)
 			}
 			// make sure eth protocol version is set for negotiation
 			if c.negotiatedProtoVersion == 0 {
@@ -356,6 +361,11 @@ loop:
 			if err := c.Write(ethProto, eth.StatusMsg, status); err != nil {
 				return fmt.Errorf("write to connection failed: %v", err)
 			}
+			// Do not break here: BSC's eth/68 handshake follows the Status
+			// exchange with a mandatory UpgradeStatus exchange. Keep reading
+			// until the node's UpgradeStatusMsg (handled below) arrives, which
+			// terminates the loop. Breaking now would leave the node's
+			// readUpgradeStatus waiting and it would drop the connection.
 		case eth.UpgradeStatusMsg + protoOffset(ethProto):
 			msg := new(eth.UpgradeStatusPacket)
 			if err := rlp.DecodeBytes(data, &msg); err != nil {

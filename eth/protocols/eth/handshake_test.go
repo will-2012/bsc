@@ -27,7 +27,8 @@ import (
 )
 
 // Tests that handshake failures are detected and reported correctly.
-func TestHandshake69(t *testing.T) { testHandshake(t, ETH69) }
+func TestHandshake68(t *testing.T) { testHandshake(t, ETH68) }
+func TestHandshake70(t *testing.T) { testHandshake(t, ETH70) }
 
 func testHandshake(t *testing.T, protocol uint) {
 	t.Parallel()
@@ -42,51 +43,50 @@ func testHandshake(t *testing.T, protocol uint) {
 		td      = backend.chain.GetTd(head.Hash(), head.Number.Uint64())
 		forkID  = forkid.NewID(backend.chain.Config(), backend.chain.Genesis(), backend.chain.CurrentHeader().Number.Uint64(), backend.chain.CurrentHeader().Time)
 	)
-	tests := []struct {
+	// makeStatus builds a status packet matching the negotiated protocol version:
+	// eth/68 uses StatusPacket68 (carrying total difficulty), while eth/69+ uses
+	// StatusPacket (carrying the served block range instead of TD).
+	makeStatus := func(version uint32, networkID uint64, genesisHash common.Hash, fID forkid.ID) interface{} {
+		if protocol >= ETH69 {
+			return StatusPacket{version, networkID, genesisHash, fID, 0, head.Number.Uint64(), head.Hash()}
+		}
+		return StatusPacket68{version, networkID, td, head.Hash(), genesisHash, fID}
+	}
+
+	type handshakeTest struct {
 		code uint64
 		data interface{}
 		want error
-	}{
+	}
+	tests := []handshakeTest{
 		{
 			code: TransactionsMsg, data: []interface{}{},
 			want: errNoStatusMsg,
 		},
 		{
-<<<<<<< HEAD
-			code: StatusMsg, data: StatusPacket68{10, 1, td, head.Hash(), genesis.Hash(), forkID},
+			code: StatusMsg, data: makeStatus(10, 1, genesis.Hash(), forkID),
 			want: errProtocolVersionMismatch,
 		},
 		{
-			code: StatusMsg, data: StatusPacket68{uint32(protocol), 999, td, head.Hash(), genesis.Hash(), forkID},
+			code: StatusMsg, data: makeStatus(uint32(protocol), 999, genesis.Hash(), forkID),
 			want: errNetworkIDMismatch,
 		},
 		{
-			code: StatusMsg, data: StatusPacket68{uint32(protocol), 1, td, head.Hash(), common.Hash{3}, forkID},
+			code: StatusMsg, data: makeStatus(uint32(protocol), 1, common.Hash{3}, forkID),
 			want: errGenesisMismatch,
 		},
 		{
-			code: StatusMsg, data: StatusPacket68{uint32(protocol), 1, td, head.Hash(), genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}},
-=======
-			code: StatusMsg, data: StatusPacket{10, 1, genesis.Hash(), forkID, 0, head.Number.Uint64(), head.Hash()},
-			want: errProtocolVersionMismatch,
-		},
-		{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 999, genesis.Hash(), forkID, 0, head.Number.Uint64(), head.Hash()},
-			want: errNetworkIDMismatch,
-		},
-		{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, common.Hash{3}, forkID, 0, head.Number.Uint64(), head.Hash()},
-			want: errGenesisMismatch,
-		},
-		{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}, 0, head.Number.Uint64(), head.Hash()},
->>>>>>> geth-v1.17.3
+			code: StatusMsg, data: makeStatus(uint32(protocol), 1, genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}),
 			want: errForkIDRejected,
 		},
-		{
+	}
+	// The block-range field only exists on eth/69+ status packets, so the
+	// invalid-range rejection can only be exercised for those versions.
+	if protocol >= ETH69 {
+		tests = append(tests, handshakeTest{
 			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, genesis.Hash(), forkID, head.Number.Uint64() + 1, head.Number.Uint64(), head.Hash()},
 			want: errInvalidBlockRange,
-		},
+		})
 	}
 	for i, test := range tests {
 		// Create the two peers to shake with each other

@@ -186,12 +186,12 @@ func (p *testTxPool) SubscribeTransactions(ch chan<- core.NewTxsEvent, reorgs bo
 	return p.txFeed.Subscribe(ch)
 }
 
-<<<<<<< HEAD
 // SubscribeReannoTxsEvent should return an event subscription of ReannoTxsEvent and
 // send events to the given channel.
 func (p *testTxPool) SubscribeReannoTxsEvent(ch chan<- core.ReannoTxsEvent) event.Subscription {
 	return p.reannoTxFeed.Subscribe(ch)
-=======
+}
+
 // FilterType should check whether the pool supports the given type of transactions.
 func (p *testTxPool) FilterType(kind byte) bool {
 	switch kind {
@@ -199,7 +199,6 @@ func (p *testTxPool) FilterType(kind byte) bool {
 		return true
 	}
 	return false
->>>>>>> geth-v1.17.3
 }
 
 // testHandler is a live implementation of the Ethereum protocol handler, just

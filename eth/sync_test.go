@@ -32,7 +32,7 @@ import (
 )
 
 // Tests that snap sync is disabled after a successful sync cycle.
-func TestSnapSyncDisabling69(t *testing.T) { testSnapSyncDisabling(t, eth.ETH69, snap.SNAP1) }
+func TestSnapSyncDisabling68(t *testing.T) { testSnapSyncDisabling(t, eth.ETH68, snap.SNAP1) }
 
 // Tests that snap sync gets disabled as soon as a real block is successfully
 // imported into the blockchain.
@@ -83,12 +83,8 @@ func testSnapSyncDisabling(t *testing.T, ethVer uint, snapVer uint) {
 	time.Sleep(250 * time.Millisecond)
 
 	// Check that snap sync was disabled
-<<<<<<< HEAD
 	op := peerToSyncOp(ethconfig.SnapSync, empty.handler.peers.peerWithHighestTD())
 	if err := empty.handler.doSync(op); err != nil {
-=======
-	if err := empty.handler.downloader.BeaconSync(full.chain.CurrentBlock(), nil); err != nil {
->>>>>>> geth-v1.17.3
 		t.Fatal("sync failed:", err)
 	}
 	// Snap sync and mode switching happen asynchronously, poll for completion.
@@ -126,14 +122,19 @@ func testChainSyncWithBlobs(t *testing.T, mode downloader.SyncMode, preCancunBlk
 	// Create an empty handler
 	empty := newTestParliaHandlerAfterCancun(t, &config, mode, 0, 0)
 	defer empty.close()
-	if ethconfig.SnapSync == mode && !empty.handler.snapSync.Load() {
+	// Snap-sync enablement is now derived from the downloader's configured sync
+	// mode (the standalone handler.snapSync flag was dropped upstream). On a
+	// pristine chain a requested snap sync must remain snap sync.
+	if ethconfig.SnapSync == mode && empty.handler.downloader.ConfigSyncMode() != ethconfig.SnapSync {
 		t.Fatalf("snap sync disabled on pristine blockchain")
 	}
 
 	// Create a full handler
 	full := newTestParliaHandlerAfterCancun(t, &config, mode, preCancunBlks, postCancunBlks)
 	defer full.close()
-	if ethconfig.SnapSync == mode && full.handler.snapSync.Load() {
+	// On a chain that already has state, a requested snap sync must be downgraded
+	// to full sync.
+	if ethconfig.SnapSync == mode && full.handler.downloader.ConfigSyncMode() == ethconfig.SnapSync {
 		t.Fatalf("snap sync not disabled on non-empty blockchain")
 	}
 
@@ -151,8 +152,8 @@ func testChainSyncWithBlobs(t *testing.T, mode downloader.SyncMode, preCancunBlk
 	defer emptyPipeEth.Close()
 	defer fullPipeEth.Close()
 
-	emptyPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{1}, "", caps), emptyPipeEth, empty.txpool)
-	fullPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{2}, "", caps), fullPipeEth, full.txpool)
+	emptyPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{1}, "", caps), emptyPipeEth, empty.txpool, nil)
+	fullPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{2}, "", caps), fullPipeEth, full.txpool, nil)
 	defer emptyPeerEth.Close()
 	defer fullPeerEth.Close()
 

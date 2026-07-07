@@ -207,8 +207,10 @@ func peerToSyncOp(mode downloader.SyncMode, p *eth.Peer) *chainSyncOp {
 }
 
 func (cs *chainSyncer) modeAndLocalHead() (downloader.SyncMode, *big.Int) {
-	// If we're in snap sync mode, return that directly
-	if cs.handler.snapSync.Load() {
+	// If we're in snap sync mode, return that directly. The downloader's syncModer
+	// is the single source of truth for the active sync mode after the geth v1.17.3
+	// merge (the old handler.snapSync flag was never set and has been removed).
+	if cs.handler.downloader.ConfigSyncMode() == ethconfig.SnapSync {
 		block := cs.handler.chain.CurrentSnapBlock()
 		td := cs.handler.chain.GetTd(block.Hash(), block.Number.Uint64())
 		return ethconfig.SnapSync, td

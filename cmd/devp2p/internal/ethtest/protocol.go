@@ -32,7 +32,10 @@ const (
 // Unexported devp2p protocol lengths from p2p package.
 const (
 	baseProtoLen = 16
-	ethProtoLen  = 17
+	// ethProtoLen is the number of eth message codes. The suite negotiates eth/70
+	// (see dial), whose protocol length is 18; this must match protocolLengths in
+	// eth/protocols/eth so the snap protocol's message-code offset lines up.
+	ethProtoLen  = 18
 	snapProtoLen = 8
 )
 

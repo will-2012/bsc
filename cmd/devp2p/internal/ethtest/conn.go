@@ -66,11 +66,10 @@ func (s *Suite) dialAs(key *ecdsa.PrivateKey) (*Conn, error) {
 		return nil, err
 	}
 	conn.caps = []p2p.Cap{
-		// TODO(Nathan): if Eth70 is enabled, change related test cases back to Eth70
 		{Name: "eth", Version: 70},
 		{Name: "eth", Version: 68},
 	}
-	conn.ourHighestProtoVersion = 68
+	conn.ourHighestProtoVersion = 70
 	return &conn, nil
 }
 
@@ -312,6 +311,17 @@ func (c *Conn) negotiateEthProtocol(caps []p2p.Cap) {
 	c.negotiatedSnapProtoVersion = highestSnapVersion
 }
 
+// offersEthVersion reports whether the connection advertised the given eth
+// protocol version, used to validate the version echoed back in the node's Status.
+func (c *Conn) offersEthVersion(version uint) bool {
+	for _, cap := range c.caps {
+		if cap.Name == "eth" && cap.Version == version {
+			return true
+		}
+	}
+	return false
+}
+
 // statusExchange performs a `Status` message exchange with the given node.
 func (c *Conn) statusExchange(chain *Chain, status *eth.StatusPacket68) error {
 loop:
@@ -322,49 +332,74 @@ loop:
 		}
 		switch code {
 		case eth.StatusMsg + protoOffset(ethProto):
-			msg := new(eth.StatusPacket68)
-			if err := rlp.DecodeBytes(data, &msg); err != nil {
-				return fmt.Errorf("error decoding status packet: %w", err)
-			}
-			if have, want := msg.Head, chain.blocks[chain.Len()-1].Hash(); have != want {
-				return fmt.Errorf("wrong head block in status, want:  %#x (block %d) have %#x",
-					want, chain.blocks[chain.Len()-1].NumberU64(), have)
-			}
-			if have, want := msg.ForkID, chain.ForkID(); !reflect.DeepEqual(have, want) {
-				return fmt.Errorf("wrong fork ID in status: have %v, want %v", have, want)
-			}
-			matched := false
-			for _, cap := range c.caps {
-				if cap.Name == "eth" && cap.Version == uint(msg.ProtocolVersion) {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				return fmt.Errorf("wrong protocol version: have %v, want %v", msg.ProtocolVersion, c.caps)
-			}
 			// make sure eth protocol version is set for negotiation
 			if c.negotiatedProtoVersion == 0 {
 				return errors.New("eth protocol version must be set in Conn")
 			}
-			if status == nil {
-				// default status message
-				status = &eth.StatusPacket68{
+			head := chain.blocks[chain.Len()-1].Hash()
+			if c.negotiatedProtoVersion >= eth.ETH70 {
+				// eth/70 status: BSC keeps TD alongside the served block range.
+				msg := new(eth.StatusPacket)
+				if err := rlp.DecodeBytes(data, &msg); err != nil {
+					return fmt.Errorf("error decoding status packet: %w", err)
+				}
+				if have, want := msg.LatestBlockHash, head; have != want {
+					return fmt.Errorf("wrong head block in status, want:  %#x (block %d) have %#x",
+						want, chain.blocks[chain.Len()-1].NumberU64(), have)
+				}
+				if have, want := msg.ForkID, chain.ForkID(); !reflect.DeepEqual(have, want) {
+					return fmt.Errorf("wrong fork ID in status: have %v, want %v", have, want)
+				}
+				if !c.offersEthVersion(uint(msg.ProtocolVersion)) {
+					return fmt.Errorf("wrong protocol version: have %v, want %v", msg.ProtocolVersion, c.caps)
+				}
+				reply := &eth.StatusPacket{
 					ProtocolVersion: uint32(c.negotiatedProtoVersion),
 					NetworkID:       chain.config.ChainID.Uint64(),
 					TD:              chain.TD(),
-					Head:            chain.blocks[chain.Len()-1].Hash(),
 					Genesis:         chain.blocks[0].Hash(),
 					ForkID:          chain.ForkID(),
+					EarliestBlock:   0,
+					LatestBlock:     uint64(chain.Len() - 1),
+					LatestBlockHash: head,
+				}
+				if err := c.Write(ethProto, eth.StatusMsg, reply); err != nil {
+					return fmt.Errorf("write to connection failed: %v", err)
+				}
+			} else {
+				msg := new(eth.StatusPacket68)
+				if err := rlp.DecodeBytes(data, &msg); err != nil {
+					return fmt.Errorf("error decoding status packet: %w", err)
+				}
+				if have, want := msg.Head, head; have != want {
+					return fmt.Errorf("wrong head block in status, want:  %#x (block %d) have %#x",
+						want, chain.blocks[chain.Len()-1].NumberU64(), have)
+				}
+				if have, want := msg.ForkID, chain.ForkID(); !reflect.DeepEqual(have, want) {
+					return fmt.Errorf("wrong fork ID in status: have %v, want %v", have, want)
+				}
+				if !c.offersEthVersion(uint(msg.ProtocolVersion)) {
+					return fmt.Errorf("wrong protocol version: have %v, want %v", msg.ProtocolVersion, c.caps)
+				}
+				if status == nil {
+					// default status message
+					status = &eth.StatusPacket68{
+						ProtocolVersion: uint32(c.negotiatedProtoVersion),
+						NetworkID:       chain.config.ChainID.Uint64(),
+						TD:              chain.TD(),
+						Head:            head,
+						Genesis:         chain.blocks[0].Hash(),
+						ForkID:          chain.ForkID(),
+					}
+				}
+				if err := c.Write(ethProto, eth.StatusMsg, status); err != nil {
+					return fmt.Errorf("write to connection failed: %v", err)
 				}
 			}
-			if err := c.Write(ethProto, eth.StatusMsg, status); err != nil {
-				return fmt.Errorf("write to connection failed: %v", err)
-			}
-			// Do not break here: BSC's eth/68 handshake follows the Status
-			// exchange with a mandatory UpgradeStatus exchange. Keep reading
-			// until the node's UpgradeStatusMsg (handled below) arrives, which
-			// terminates the loop. Breaking now would leave the node's
+			// Do not break here: BSC's handshake (both eth/68 and eth/70) follows
+			// the Status exchange with a mandatory UpgradeStatus exchange. Keep
+			// reading until the node's UpgradeStatusMsg (handled below) arrives,
+			// which terminates the loop. Breaking now would leave the node's
 			// readUpgradeStatus waiting and it would drop the connection.
 		case eth.UpgradeStatusMsg + protoOffset(ethProto):
 			msg := new(eth.UpgradeStatusPacket)

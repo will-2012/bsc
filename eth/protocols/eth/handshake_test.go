@@ -44,11 +44,12 @@ func testHandshake(t *testing.T, protocol uint) {
 		forkID  = forkid.NewID(backend.chain.Config(), backend.chain.Genesis(), backend.chain.CurrentHeader().Number.Uint64(), backend.chain.CurrentHeader().Time)
 	)
 	// makeStatus builds a status packet matching the negotiated protocol version:
-	// eth/68 uses StatusPacket68 (carrying total difficulty), while eth/69+ uses
-	// StatusPacket (carrying the served block range instead of TD).
+	// eth/68 uses StatusPacket68, while eth/70 uses StatusPacket. Both carry total
+	// difficulty (BSC keeps TD in the eth/70 handshake); eth/70 additionally
+	// carries the served block range.
 	makeStatus := func(version uint32, networkID uint64, genesisHash common.Hash, fID forkid.ID) interface{} {
 		if protocol >= ETH69 {
-			return StatusPacket{version, networkID, genesisHash, fID, 0, head.Number.Uint64(), head.Hash()}
+			return StatusPacket{version, networkID, td, genesisHash, fID, 0, head.Number.Uint64(), head.Hash()}
 		}
 		return StatusPacket68{version, networkID, td, head.Hash(), genesisHash, fID}
 	}
@@ -84,7 +85,7 @@ func testHandshake(t *testing.T, protocol uint) {
 	// invalid-range rejection can only be exercised for those versions.
 	if protocol >= ETH69 {
 		tests = append(tests, handshakeTest{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, genesis.Hash(), forkID, head.Number.Uint64() + 1, head.Number.Uint64(), head.Hash()},
+			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, td, genesis.Hash(), forkID, head.Number.Uint64() + 1, head.Number.Uint64(), head.Hash()},
 			want: errInvalidBlockRange,
 		})
 	}

@@ -505,7 +505,7 @@ func (p *Peer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, timestamp
 	id := rand.Uint64()
 
 	var req *Request
-	if p.version > ETH69 {
+	if p.version >= ETH70 {
 		req = &Request{
 			id:       id,
 			sink:     sink,
@@ -713,7 +713,7 @@ func (p *Peer) RequestTxs(hashes []common.Hash) error {
 
 // SendBlockRangeUpdate sends a notification about our available block range to the peer.
 func (p *Peer) SendBlockRangeUpdate(msg BlockRangeUpdatePacket) error {
-	if p.version < ETH69 {
+	if p.version < ETH70 {
 		return nil
 	}
 	return p2p.Send(p.rw, BlockRangeUpdateMsg, &msg)

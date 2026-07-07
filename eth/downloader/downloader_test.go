@@ -324,7 +324,7 @@ func (dlp *downloadTesterPeer) RequestReceipts(hashes []common.Hash, gasUsed []u
 	// metadata carries the derived receipt-root hashes for validation.
 	hasher := trie.NewStackTrie(nil)
 	var (
-		resp    eth.ReceiptsRLPResponse
+		resp       eth.ReceiptsRLPResponse
 		metaHashes = make([]common.Hash, 0, len(hashes))
 	)
 	for _, hash := range hashes {

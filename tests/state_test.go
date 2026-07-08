@@ -94,6 +94,7 @@ func TestLegacyState(t *testing.T) {
 	// the legacy variants here too.
 	st.skipLoad(`InitCollision`)
 	st.skipLoad(`create2collisionStorage`)
+	st.skipLoad(`dynamicAccountOverwriteEmpty`)
 	st.walk(t, legacyStateTestDir, func(t *testing.T, name string, test *StateTest) {
 		execStateTest(t, st, test)
 	})

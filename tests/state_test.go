@@ -84,6 +84,16 @@ func TestState(t *testing.T) {
 func TestLegacyState(t *testing.T) {
 	st := new(testMatcher)
 	initMatcher(st)
+	// The Constantinople-era InitCollision / create2collisionStorage fixtures
+	// exercise storage-collision rejection on contract creation. BSC replaces the
+	// universal storage-root check with the EIP-7610 per-chain allowlist
+	// optimization (core/vm/eip7610.go), which intentionally does not reproduce
+	// this rejection for non-allowlisted addresses. BSC enables EIP-158 from
+	// genesis and never executed these historical forks, so the scenario is not
+	// consensus-relevant. Upstream already skips the Paris variants of these; skip
+	// the legacy variants here too.
+	st.skipLoad(`InitCollision`)
+	st.skipLoad(`create2collisionStorage`)
 	st.walk(t, legacyStateTestDir, func(t *testing.T, name string, test *StateTest) {
 		execStateTest(t, st, test)
 	})

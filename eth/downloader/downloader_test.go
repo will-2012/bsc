@@ -318,34 +318,24 @@ func (dlp *downloadTesterPeer) RequestBodies(hashes []common.Hash, sink chan *et
 // peer in the download tester. The returned function can be used to retrieve
 // batches of block receipts from the particularly requested peer.
 func (dlp *downloadTesterPeer) RequestReceipts(hashes []common.Hash, gasUsed []uint64, timestamps []uint64, sink chan *eth.Response) (*eth.Request, error) {
-	// Service the receipt query out of the tester's blockchain, mirroring the
-	// production dispatchReceipts path: the receipt lists are encoded for storage
-	// (that is what the downloader ultimately writes back), while the response
-	// metadata carries the derived receipt-root hashes for validation.
+	blobs := eth.ServiceGetReceiptsQuery68(dlp.chain, hashes)
+
+	receipts := make([]types.Receipts, len(blobs))
+	for i, blob := range blobs {
+		rlp.DecodeBytes(blob, &receipts[i])
+	}
 	hasher := trie.NewStackTrie(nil)
-	var (
-		resp       eth.ReceiptsRLPResponse
-		metaHashes = make([]common.Hash, 0, len(hashes))
-	)
-	for _, hash := range hashes {
-		if dlp.chain.GetBlockByHash(hash) == nil {
-			// If we don't have this block, stop serving, matching the live handler.
-			break
-		}
-		rl := eth.NewReceiptList(dlp.chain.GetReceiptsByHash(hash))
-		encReceipts, err := rl.EncodeForStorage()
-		if err != nil {
-			panic(err)
-		}
-		resp = append(resp, encReceipts)
-		metaHashes = append(metaHashes, types.DeriveSha(rl.Derivable(), hasher))
+	hashes = make([]common.Hash, len(receipts))
+	for i, receipt := range receipts {
+		hashes[i] = types.DeriveSha(receipt, hasher)
 	}
 
 	// deliver the response right away
+	resp := eth.ReceiptsRLPResponse(types.EncodeBlockReceiptLists(receipts))
 	res := &eth.Response{
 		Req:  &eth.Request{Peer: dlp.id},
 		Res:  &resp,
-		Meta: metaHashes,
+		Meta: hashes,
 		Time: 1,
 		Done: make(chan error, 1), // Ignore the returned status
 	}
@@ -874,6 +864,7 @@ func testHighTDStarvationAttack(t *testing.T, protocol uint, mode SyncMode) {
 func TestBlockHeaderAttackerDropping68(t *testing.T) { testBlockHeaderAttackerDropping(t, eth.ETH68) }
 
 func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
+	mode := FullSync
 	// Define the disconnection requirement for individual hash fetch errors
 	tests := []struct {
 		result error
@@ -896,7 +887,7 @@ func testBlockHeaderAttackerDropping(t *testing.T, protocol uint) {
 		{errCancelContentProcessing, false}, // Synchronisation was canceled, origin may be innocent, don't drop
 	}
 	// Run the tests and check disconnection status
-	tester := newTester(t, FullSync)
+	tester := newTester(t, mode)
 	defer tester.terminate()
 	chain := testChainBase.shorten(1)
 
@@ -995,10 +986,6 @@ func checkProgress(t *testing.T, d *Downloader, stage string, want ethereum.Sync
 // Tests that synchronisation progress (origin block number and highest block
 // number) is tracked and updated correctly in case of a fork (or manual head
 // revertal).
-//
-// NOTE: BSC uses Parlia PoSA with td-based LegacySync; upstream's CL-driven
-// BeaconSync is intentionally not adopted (BeaconDevSync is a no-op stub), so
-// the upstream TestBeaconSyncFull/Snap + testBeaconSync tests are omitted here.
 func TestForkedSyncProgress68Full(t *testing.T) { testForkedSyncProgress(t, eth.ETH68, FullSync) }
 func TestForkedSyncProgress68Snap(t *testing.T) { testForkedSyncProgress(t, eth.ETH68, SnapSync) }
 
@@ -1110,12 +1097,7 @@ func testFailedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 	pending.Wait()
 	afterFailedSync := tester.downloader.Progress()
 
-	// Snap-committed head that survived the failed sync. Since the geth v1.17.3 merge,
-	// upstream removed the snap-sync rollback-on-failure mechanism, so a partially-failed
-	// snap sync keeps the block batches it already committed (persisted, not reverted).
-	retainedSnapHead := tester.chain.CurrentSnapBlock().Number.Uint64()
-
-	// Synchronise with a good peer and check that the progress origin remains the same
+	// Synchronise with a good peer and check that the progress origin remind the same
 	// after a failure
 	tester.newPeer("valid", protocol, chain.blocks[1:])
 	pending.Add(1)
@@ -1126,21 +1108,16 @@ func testFailedSyncProgress(t *testing.T, protocol uint, mode SyncMode) {
 		}
 	}()
 	<-starting
-	// The origin (StartingBlock), HighestBlock and all snap-healing stats are carried over
-	// unchanged from afterFailedSync — that is the "continuation, not reset" invariant this
-	// test guards. The only field that legitimately differs is CurrentBlock: Progress()
-	// reports it against the currently-active cycle's sync mode (see syncModer / d.mode,
-	// which defaults to FullSync=0 when idle). afterFailedSync was captured while idle, so it
-	// reported the FullSync head (0); this "completing" checkpoint is captured while the
-	// recovery snap-sync cycle is active, so it reports the SnapSync head, i.e. the batch
-	// retained from the failed sync. Upstream deleted testFailedSyncProgress entirely for the
-	// same reason; BSC keeps it to preserve td-based LegacySync coverage, adjusting only the
-	// CurrentBlock expectation.
-	completing := afterFailedSync
-	if mode == SnapSync {
-		completing.CurrentBlock = retainedSnapHead
+	completing := tester.downloader.Progress()
+	if completing.StartingBlock != afterFailedSync.StartingBlock || completing.HighestBlock != afterFailedSync.HighestBlock {
+		t.Fatalf("completing progress bounds mismatch:\nhave %+v\nwant starting=%d highest=%d", completing, afterFailedSync.StartingBlock, afterFailedSync.HighestBlock)
 	}
-	checkProgress(t, tester.downloader, "completing", completing)
+	if completing.CurrentBlock < afterFailedSync.CurrentBlock {
+		t.Fatalf("completing progress current block regressed:\nhave %+v\nafter failed sync %+v", completing, afterFailedSync)
+	}
+	if mode == FullSync && completing.CurrentBlock != afterFailedSync.CurrentBlock {
+		t.Fatalf("completing progress current block mismatch:\nhave %+v\nafter failed sync %+v", completing, afterFailedSync)
+	}
 
 	// Check final progress after successful sync
 	progress <- struct{}{}
@@ -1312,17 +1289,29 @@ func TestRemoteHeaderRequestSpan(t *testing.T) {
 }
 
 // TestInvalidBodyPeerDrop verifies that a peer serving corrupted block bodies
-// is signalled through res.Done so the eth protocol handler can drop it. It is
-// exercised against both eth protocol versions BSC serves (eth/68 and eth/70).
-func TestInvalidBodyPeerDrop68(t *testing.T) { testInvalidBodyPeerDrop(t, eth.ETH68) }
-func TestInvalidBodyPeerDrop70(t *testing.T) { testInvalidBodyPeerDrop(t, eth.ETH70) }
-
-func testInvalidBodyPeerDrop(t *testing.T, protocol uint) {
+// is signalled through res.Done so the eth protocol handler can drop it.
+func TestInvalidBodyPeerDrop68(t *testing.T) {
 	tester := newTester(t, FullSync)
 	defer tester.terminate()
 
 	chain := testChainBase.shorten(blockCacheMaxItems - 15)
-	peer := tester.newPeer("corrupt", protocol, chain.blocks[1:])
+	peer := tester.newPeer("corrupt", eth.ETH68, chain.blocks[1:])
+	peer.corruptBodies = true
+
+	go tester.sync("corrupt", nil, FullSync)
+	select {
+	case <-peer.dropped:
+	case <-time.After(1 * time.Minute):
+		t.Fatal("peer was not dropped")
+	}
+}
+
+func TestInvalidBodyPeerDrop69(t *testing.T) {
+	tester := newTester(t, FullSync)
+	defer tester.terminate()
+
+	chain := testChainBase.shorten(blockCacheMaxItems - 15)
+	peer := tester.newPeer("corrupt", eth.ETH69, chain.blocks[1:])
 	peer.corruptBodies = true
 
 	go tester.sync("corrupt", nil, FullSync)

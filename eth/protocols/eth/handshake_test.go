@@ -43,51 +43,67 @@ func testHandshake(t *testing.T, protocol uint) {
 		td      = backend.chain.GetTd(head.Hash(), head.Number.Uint64())
 		forkID  = forkid.NewID(backend.chain.Config(), backend.chain.Genesis(), backend.chain.CurrentHeader().Number.Uint64(), backend.chain.CurrentHeader().Time)
 	)
-	// makeStatus builds a status packet matching the negotiated protocol version:
-	// eth/68 uses StatusPacket68, while eth/70 uses StatusPacket. Both carry total
-	// difficulty (BSC keeps TD in the eth/70 handshake); eth/70 additionally
-	// carries the served block range.
-	makeStatus := func(version uint32, networkID uint64, genesisHash common.Hash, fID forkid.ID) interface{} {
-		if protocol >= ETH69 {
-			return StatusPacket{version, networkID, td, genesisHash, fID, 0, head.Number.Uint64(), head.Hash()}
-		}
-		return StatusPacket68{version, networkID, td, head.Hash(), genesisHash, fID}
-	}
-
-	type handshakeTest struct {
+	tests := []struct {
 		code uint64
 		data interface{}
 		want error
-	}
-	tests := []handshakeTest{
+	}{
 		{
 			code: TransactionsMsg, data: []interface{}{},
 			want: errNoStatusMsg,
 		},
-		{
-			code: StatusMsg, data: makeStatus(10, 1, genesis.Hash(), forkID),
-			want: errProtocolVersionMismatch,
-		},
-		{
-			code: StatusMsg, data: makeStatus(uint32(protocol), 999, genesis.Hash(), forkID),
-			want: errNetworkIDMismatch,
-		},
-		{
-			code: StatusMsg, data: makeStatus(uint32(protocol), 1, common.Hash{3}, forkID),
-			want: errGenesisMismatch,
-		},
-		{
-			code: StatusMsg, data: makeStatus(uint32(protocol), 1, genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}),
-			want: errForkIDRejected,
-		},
 	}
-	// The block-range field only exists on eth/69+ status packets, so the
-	// invalid-range rejection can only be exercised for those versions.
-	if protocol >= ETH69 {
-		tests = append(tests, handshakeTest{
-			code: StatusMsg, data: StatusPacket{uint32(protocol), 1, td, genesis.Hash(), forkID, head.Number.Uint64() + 1, head.Number.Uint64(), head.Hash()},
-			want: errInvalidBlockRange,
-		})
+	if protocol == ETH68 {
+		tests = append(tests,
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket68{10, 1, td, head.Hash(), genesis.Hash(), forkID}, want: errProtocolVersionMismatch},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket68{uint32(protocol), 999, td, head.Hash(), genesis.Hash(), forkID}, want: errNetworkIDMismatch},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket68{uint32(protocol), 1, td, head.Hash(), common.Hash{3}, forkID}, want: errGenesisMismatch},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket68{uint32(protocol), 1, td, head.Hash(), genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}}, want: errForkIDRejected},
+		)
+	} else {
+		tests = append(tests,
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket{10, 1, genesis.Hash(), forkID, 0, head.Number.Uint64(), head.Hash()}, want: errProtocolVersionMismatch},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket{uint32(protocol), 999, genesis.Hash(), forkID, 0, head.Number.Uint64(), head.Hash()}, want: errNetworkIDMismatch},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket{uint32(protocol), 1, common.Hash{3}, forkID, 0, head.Number.Uint64(), head.Hash()}, want: errGenesisMismatch},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket{uint32(protocol), 1, genesis.Hash(), forkid.ID{Hash: [4]byte{0x00, 0x01, 0x02, 0x03}}, 0, head.Number.Uint64(), head.Hash()}, want: errForkIDRejected},
+			struct {
+				code uint64
+				data interface{}
+				want error
+			}{code: StatusMsg, data: StatusPacket{uint32(protocol), 1, genesis.Hash(), forkID, head.Number.Uint64() + 1, head.Number.Uint64(), head.Hash()}, want: errInvalidBlockRange},
+		)
 	}
 	for i, test := range tests {
 		// Create the two peers to shake with each other

@@ -41,9 +41,9 @@ import (
 // testEthHandler is a mock event handler to listen for inbound network requests
 // on the `eth` protocol and convert them into a more easily testable form.
 type testEthHandler struct {
-	blockBroadcasts event.Feed
 	txAnnounces     event.Feed
 	txBroadcasts    event.Feed
+	blockBroadcasts event.Feed
 }
 
 func (h *testEthHandler) Chain() *core.BlockChain              { panic("no backing chain") }
@@ -54,10 +54,6 @@ func (h *testEthHandler) PeerInfo(enode.ID) interface{}        { panic("not used
 
 func (h *testEthHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 	switch packet := packet.(type) {
-	case *eth.NewBlockPacket:
-		h.blockBroadcasts.Send(packet.Block)
-		return nil
-
 	case *eth.NewPooledTransactionHashesPacket:
 		h.txAnnounces.Send(packet.Hashes)
 		return nil
@@ -76,6 +72,10 @@ func (h *testEthHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 			return err
 		}
 		h.txBroadcasts.Send(txs)
+		return nil
+
+	case *eth.NewBlockPacket:
+		h.blockBroadcasts.Send(packet.Block)
 		return nil
 
 	default:
@@ -334,7 +334,7 @@ func testWaitSnapExtensionTimout(t *testing.T, protocol uint) {
 			Name:    "snap",
 			Version: 1,
 		},
-	}), p2pSink, nil, nil)
+	}), p2pSink, nil, handler.chain.Config())
 	defer sink.Close()
 
 	err := handler.handler.runEthPeer(sink, func(peer *eth.Peer) error {
@@ -371,7 +371,7 @@ func testWaitBscExtensionTimout(t *testing.T, protocol uint) {
 			Name:    "bsc",
 			Version: bsc.Bsc1,
 		},
-	}), p2pSink, nil, nil)
+	}), p2pSink, nil, handler.chain.Config())
 	defer sink.Close()
 
 	err := handler.handler.runEthPeer(sink, func(peer *eth.Peer) error {
@@ -545,8 +545,8 @@ func TestTransactionPendingReannounce(t *testing.T) {
 	defer sourcePipe.Close()
 	defer sinkPipe.Close()
 
-	sourcePeer := eth.NewPeer(eth.ETH68, p2p.NewPeer(enode.ID{0}, "", nil), sourcePipe, source.txpool, nil)
-	sinkPeer := eth.NewPeer(eth.ETH68, p2p.NewPeer(enode.ID{0}, "", nil), sinkPipe, sink.txpool, nil)
+	sourcePeer := eth.NewPeer(eth.ETH68, p2p.NewPeer(enode.ID{0}, "", nil), sourcePipe, source.txpool, source.chain.Config())
+	sinkPeer := eth.NewPeer(eth.ETH68, p2p.NewPeer(enode.ID{0}, "", nil), sinkPipe, sink.txpool, sink.chain.Config())
 	defer sourcePeer.Close()
 	defer sinkPeer.Close()
 
@@ -685,8 +685,8 @@ func testBroadcastMalformedBlock(t *testing.T, protocol uint) {
 	defer p2pSrc.Close()
 	defer p2pSink.Close()
 
-	src := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, source.txpool, nil)
-	sink := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{2}, "", nil, p2pSink), p2pSink, source.txpool, nil)
+	src := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{1}, "", nil, p2pSrc), p2pSrc, source.txpool, source.chain.Config())
+	sink := eth.NewPeer(protocol, p2p.NewPeerPipe(enode.ID{2}, "", nil, p2pSink), p2pSink, source.txpool, source.chain.Config())
 	defer src.Close()
 	defer sink.Close()
 
@@ -765,8 +765,8 @@ func TestOptionMaxPeersPerIP(t *testing.T) {
 		}
 		uniPort++
 
-		src := eth.NewPeer(eth.ETH68, peer1, p2pSrc, handler.txpool, nil)
-		sink := eth.NewPeer(eth.ETH68, peer2, p2pSink, handler.txpool, nil)
+		src := eth.NewPeer(eth.ETH68, peer1, p2pSrc, handler.txpool, handler.chain.Config())
+		sink := eth.NewPeer(eth.ETH68, peer2, p2pSink, handler.txpool, handler.chain.Config())
 		defer src.Close()
 		defer sink.Close()
 

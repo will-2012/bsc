@@ -40,7 +40,7 @@ const (
 func (p *Peer) Handshake(networkID uint64, chain forkid.Blockchain, rangeMsg BlockRangeUpdatePacket, td *big.Int, extension *UpgradeStatusExtension) error {
 	switch p.version {
 	case ETH70:
-		return p.handshake(networkID, chain, rangeMsg, td, extension)
+		return p.handshake(networkID, chain, rangeMsg)
 	case ETH68:
 		return p.handshake68(networkID, chain, td, extension)
 	default:
@@ -131,7 +131,7 @@ func (p *Peer) readStatus68(networkID uint64, status *StatusPacket68, genesis co
 	return nil
 }
 
-func (p *Peer) handshake(networkID uint64, chain forkid.Blockchain, rangeMsg BlockRangeUpdatePacket, td *big.Int, extension *UpgradeStatusExtension) error {
+func (p *Peer) handshake(networkID uint64, chain forkid.Blockchain, rangeMsg BlockRangeUpdatePacket) error {
 	var (
 		genesis    = chain.Genesis()
 		latest     = chain.CurrentHeader()
@@ -139,14 +139,11 @@ func (p *Peer) handshake(networkID uint64, chain forkid.Blockchain, rangeMsg Blo
 		forkFilter = forkid.NewFilter(chain)
 	)
 
-	// Phase 1: exchange the status packet. BSC's eth/70 keeps the total
-	// difficulty (for TD-driven peer selection) alongside the eth/70 block range.
 	errc := make(chan error, 2)
 	go func() {
 		pkt := &StatusPacket{
 			ProtocolVersion: uint32(p.version),
 			NetworkID:       networkID,
-			TD:              td,
 			Genesis:         genesis.Hash(),
 			ForkID:          forkID,
 			EarliestBlock:   rangeMsg.EarliestBlock,
@@ -159,46 +156,8 @@ func (p *Peer) handshake(networkID uint64, chain forkid.Blockchain, rangeMsg Blo
 	go func() {
 		errc <- p.readStatus(networkID, &status, genesis.Hash(), forkFilter)
 	}()
-	if err := waitForHandshake(errc, p); err != nil {
-		return err
-	}
-	p.td, p.head = status.TD, status.LatestBlockHash
-	// TD sanity bound, mirroring handshake68: mainnet TD at #7753254 is 76 bits.
-	if tdlen := p.td.BitLen(); tdlen > 100 {
-		return fmt.Errorf("too large total difficulty: bitlen %d", tdlen)
-	}
 
-	// Phase 2: exchange the BSC UpgradeStatus extension, keeping eth/70 at feature
-	// parity with eth/68 (e.g. DisablePeerTxBroadcast).
-	var upgradeStatus UpgradeStatusPacket // safe to read after two values have been received from errc
-	if extension == nil {
-		extension = &UpgradeStatusExtension{}
-	}
-	extensionRaw, err := extension.Encode()
-	if err != nil {
-		return err
-	}
-	gopool.Submit(func() {
-		errc <- p2p.Send(p.rw, UpgradeStatusMsg, &UpgradeStatusPacket{
-			Extension: extensionRaw,
-		})
-	})
-	gopool.Submit(func() {
-		errc <- p.readUpgradeStatus(&upgradeStatus)
-	})
-	if err := waitForHandshake(errc, p); err != nil {
-		return err
-	}
-	extension, err = upgradeStatus.GetExtension()
-	if err != nil {
-		return err
-	}
-	p.statusExtension = extension
-	if p.statusExtension.DisablePeerTxBroadcast {
-		p.Log().Debug("peer does not need broadcast txs, closing broadcast routines")
-		p.CloseTxBroadcast()
-	}
-	return nil
+	return waitForHandshake(errc, p)
 }
 
 func (p *Peer) readStatus(networkID uint64, status *StatusPacket, genesis common.Hash, forkFilter forkid.Filter) error {

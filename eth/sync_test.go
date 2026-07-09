@@ -122,19 +122,14 @@ func testChainSyncWithBlobs(t *testing.T, mode downloader.SyncMode, preCancunBlk
 	// Create an empty handler
 	empty := newTestParliaHandlerAfterCancun(t, &config, mode, 0, 0)
 	defer empty.close()
-	// Snap-sync enablement is now derived from the downloader's configured sync
-	// mode (the standalone handler.snapSync flag was dropped upstream). On a
-	// pristine chain a requested snap sync must remain snap sync.
-	if ethconfig.SnapSync == mode && empty.handler.downloader.ConfigSyncMode() != ethconfig.SnapSync {
+	if ethconfig.SnapSync == mode && !empty.handler.snapSync.Load() {
 		t.Fatalf("snap sync disabled on pristine blockchain")
 	}
 
 	// Create a full handler
 	full := newTestParliaHandlerAfterCancun(t, &config, mode, preCancunBlks, postCancunBlks)
 	defer full.close()
-	// On a chain that already has state, a requested snap sync must be downgraded
-	// to full sync.
-	if ethconfig.SnapSync == mode && full.handler.downloader.ConfigSyncMode() == ethconfig.SnapSync {
+	if ethconfig.SnapSync == mode && full.handler.snapSync.Load() {
 		t.Fatalf("snap sync not disabled on non-empty blockchain")
 	}
 
@@ -152,8 +147,8 @@ func testChainSyncWithBlobs(t *testing.T, mode downloader.SyncMode, preCancunBlk
 	defer emptyPipeEth.Close()
 	defer fullPipeEth.Close()
 
-	emptyPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{1}, "", caps), emptyPipeEth, empty.txpool, nil)
-	fullPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{2}, "", caps), fullPipeEth, full.txpool, nil)
+	emptyPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{1}, "", caps), emptyPipeEth, empty.txpool, empty.chain.Config())
+	fullPeerEth := eth.NewPeer(ethVer, p2p.NewPeer(enode.ID{2}, "", caps), fullPipeEth, full.txpool, full.chain.Config())
 	defer emptyPeerEth.Close()
 	defer fullPeerEth.Close()
 

@@ -167,6 +167,7 @@ type handler struct {
 	proxyedValidatorAddressMap map[common.Address]struct{}
 	proxyedNodeIdsMap          map[enode.ID]struct{}
 
+	snapSync        atomic.Bool // Flag whether snap sync is enabled (gets disabled if we already have blocks)
 	synced          atomic.Bool // Flag whether we're considered synchronised (enables transaction processing)
 	acceptTxs       atomic.Bool
 	directBroadcast bool

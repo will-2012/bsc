@@ -244,6 +244,9 @@ func newTestHandlerWithBlocks(blocks int, mode ethconfig.SyncMode) *testHandler 
 		Sync:       mode,
 		BloomCache: 1,
 	})
+	if mode == ethconfig.SnapSync && blocks == 0 {
+		handler.snapSync.Store(true)
+	}
 	handler.Start(1000, 3)
 
 	return &testHandler{
@@ -350,6 +353,9 @@ func newTestParliaHandlerAfterCancun(t *testing.T, config *params.ChainConfig, m
 		Sync:       mode,
 		BloomCache: 1,
 	})
+	if mode == ethconfig.SnapSync && preCancunBlks+postCancunBlks == 0 {
+		handler.snapSync.Store(true)
+	}
 	handler.Start(1000, 3)
 
 	return &testHandler{
@@ -538,7 +544,7 @@ func createTestPeers(rand *rand.Rand, n int) []*ethPeer {
 		var id enode.ID
 		rand.Read(id[:])
 		p2pPeer := p2p.NewPeer(id, "test", nil)
-		ep := eth.NewPeer(eth.ETH69, p2pPeer, nil, nil, nil)
+		ep := eth.NewPeer(eth.ETH68, p2pPeer, nil, nil, nil)
 		peers[i] = &ethPeer{Peer: ep}
 	}
 	return peers

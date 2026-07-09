@@ -109,14 +109,13 @@ func (w *worker) maxBlobsPerBlock(time uint64) int {
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
 type environment struct {
-	signer      types.Signer
-	state       *state.StateDB // apply state changes here
-	tcount      int            // tx count in cycle
-	size        uint64         // size of the block we are building
-	gasPool     *core.GasPool  // available gas used to pack transactions
-	gasReserved uint64         // gas reserved in gasPool for Parlia system txs, excluded from header.GasUsed
-	coinbase    common.Address
-	evm         *vm.EVM
+	signer   types.Signer
+	state    *state.StateDB // apply state changes here
+	tcount   int            // tx count in cycle
+	size     uint64         // size of the block we are building
+	gasPool  *core.GasPool  // available gas used to pack transactions
+	coinbase common.Address
+	evm      *vm.EVM
 
 	header   *types.Header
 	txs      []*types.Transaction
@@ -701,27 +700,30 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 		}
 	}
 	state.StartPrefetcher("miner", bundle)
+	// Parlia reserves gas for the system txs it applies in FinalizeAndAssemble,
+	// so user txs must leave room for them. Initialise the gas pool at
+	// GasLimit-gasReserved (rather than reserving via SubGas afterwards) so
+	// GasPool.Used() stays equal to the real user-tx consumption; header.GasUsed
+	// then matches the reservation-free gas pool used on block import
+	// (core.StateProcessor) instead of being inflated by the reservation.
+	var gasReserved uint64
+	if p, ok := w.engine.(*parlia.Parlia); ok {
+		gasReserved = p.EstimateGasReservedForSystemTxs(w.chain, header)
+		if gasReserved > header.GasLimit {
+			gasReserved = header.GasLimit
+		}
+		log.Debug("makeEnv", "number", header.Number.Uint64(), "time", header.Time, "EstimateGasReservedForSystemTxs", gasReserved)
+	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
 		signer:   types.MakeSigner(w.chainConfig, header.Number, header.Time),
 		state:    state,
 		size:     uint64(header.Size()),
 		coinbase: coinbase,
-		gasPool:  core.NewGasPool(header.GasLimit),
+		gasPool:  core.NewGasPool(header.GasLimit - gasReserved),
 		header:   header,
 		witness:  state.Witness(),
 		evm:      vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
-	}
-	if p, ok := w.engine.(*parlia.Parlia); ok {
-		gasReserved := p.EstimateGasReservedForSystemTxs(w.chain, env.header)
-		// Reserve gas so user txs leave room for the system txs applied in
-		// FinalizeAndAssemble. Track the reserved amount so it can be excluded
-		// from header.GasUsed below (SubGas only lowers remaining, so the
-		// reservation would otherwise leak into GasPool.Used()).
-		if err := env.gasPool.SubGas(gasReserved); err == nil {
-			env.gasReserved = gasReserved
-		}
-		log.Debug("makeEnv", "number", env.header.Number.Uint64(), "time", env.header.Time, "EstimateGasReservedForSystemTxs", gasReserved)
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
@@ -786,10 +788,7 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction, recei
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.Set(gp)
 	}
-	// Exclude the Parlia system-tx reservation (see makeEnv): header.GasUsed
-	// must carry only real consumption to match the reservation-free gas pool
-	// used on block import (core.StateProcessor).
-	env.header.GasUsed = env.gasPool.Used() - env.gasReserved
+	env.header.GasUsed = env.gasPool.Used()
 	return receipt, err
 }
 

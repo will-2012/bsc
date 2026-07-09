@@ -109,13 +109,14 @@ func (w *worker) maxBlobsPerBlock(time uint64) int {
 // environment is the worker's current environment and holds all
 // information of the sealing block generation.
 type environment struct {
-	signer   types.Signer
-	state    *state.StateDB // apply state changes here
-	tcount   int            // tx count in cycle
-	size     uint64         // size of the block we are building
-	gasPool  *core.GasPool  // available gas used to pack transactions
-	coinbase common.Address
-	evm      *vm.EVM
+	signer      types.Signer
+	state       *state.StateDB // apply state changes here
+	tcount      int            // tx count in cycle
+	size        uint64         // size of the block we are building
+	gasPool     *core.GasPool  // available gas used to pack transactions
+	gasReserved uint64         // gas reserved in gasPool for Parlia system txs, excluded from header.GasUsed
+	coinbase    common.Address
+	evm         *vm.EVM
 
 	header   *types.Header
 	txs      []*types.Transaction
@@ -713,7 +714,13 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	}
 	if p, ok := w.engine.(*parlia.Parlia); ok {
 		gasReserved := p.EstimateGasReservedForSystemTxs(w.chain, env.header)
-		env.gasPool.SubGas(gasReserved)
+		// Reserve gas so user txs leave room for the system txs applied in
+		// FinalizeAndAssemble. Track the reserved amount so it can be excluded
+		// from header.GasUsed below (SubGas only lowers remaining, so the
+		// reservation would otherwise leak into GasPool.Used()).
+		if err := env.gasPool.SubGas(gasReserved); err == nil {
+			env.gasReserved = gasReserved
+		}
 		log.Debug("makeEnv", "number", env.header.Number.Uint64(), "time", env.header.Time, "EstimateGasReservedForSystemTxs", gasReserved)
 	}
 	// Keep track of transactions which return errors so they can be removed
@@ -779,7 +786,10 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction, recei
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.Set(gp)
 	}
-	env.header.GasUsed = env.gasPool.Used()
+	// Exclude the Parlia system-tx reservation (see makeEnv): header.GasUsed
+	// must carry only real consumption to match the reservation-free gas pool
+	// used on block import (core.StateProcessor).
+	env.header.GasUsed = env.gasPool.Used() - env.gasReserved
 	return receipt, err
 }
 

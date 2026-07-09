@@ -35,9 +35,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-
       - name: Install Deps
+        # Pin the commitlint packages to the CommonJS v18 line that matches the
+        # commitlint core bundled in wagoid/commitlint-github-action@v5.5.1
+        # (@commitlint/load ^18.6.1). Without a pin, npm pulls the latest
+        # @commitlint/config-conventional (v19+, ESM-only) into the workspace,
+        # which the action resolves via NODE_PATH and require()s, crashing with
+        # ERR_REQUIRE_ESM before any commit message is linted.
         run: |
-          npm install -g commitlint-plugin-function-rules @commitlint/cli
-          npm install --save-dev commitlint-plugin-function-rules @commitlint/cli
+          npm install -g commitlint-plugin-function-rules@2 @commitlint/cli@18 @commitlint/config-conventional@18
+          npm install --save-dev commitlint-plugin-function-rules@2 @commitlint/cli@18 @commitlint/config-conventional@18
       - uses: wagoid/commitlint-github-action@v5
         id: commitlint
         env:

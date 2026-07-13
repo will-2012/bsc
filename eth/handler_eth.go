@@ -72,19 +72,62 @@ func (h *ethHandler) Handle(peer *eth.Peer, packet eth.Packet) error {
 		return h.txFetcher.Notify(peer.ID(), packet.Types, packet.Sizes, packet.Hashes)
 
 	case *eth.TransactionsPacket:
-		for _, tx := range *packet {
-			if tx.Type() == types.BlobTxType {
-				return errors.New("disallowed broadcast blob transaction")
-			}
+		txs, err := packet.Items()
+		if err != nil {
+			return fmt.Errorf("Transactions: %v", err)
 		}
-		return h.txFetcher.Enqueue(peer.ID(), *packet, false)
+		if err := handleTransactions(peer, txs, true); err != nil {
+			return fmt.Errorf("Transactions: %v", err)
+		}
+		return h.txFetcher.Enqueue(peer.ID(), txs, false)
 
-	case *eth.PooledTransactionsResponse:
-		return h.txFetcher.Enqueue(peer.ID(), *packet, true)
+	case *eth.PooledTransactionsPacket:
+		txs, err := packet.List.Items()
+		if err != nil {
+			return fmt.Errorf("PooledTransactions: %v", err)
+		}
+		if err := handleTransactions(peer, txs, false); err != nil {
+			return fmt.Errorf("PooledTransactions: %v", err)
+		}
+		return h.txFetcher.Enqueue(peer.ID(), txs, true)
 
 	default:
 		return fmt.Errorf("unexpected eth packet type: %T", packet)
 	}
+}
+
+// handleTransactions marks all given transactions as known to the peer
+// and performs basic validations.
+func handleTransactions(peer *eth.Peer, list []*types.Transaction, directBroadcast bool) error {
+	seen := make(map[common.Hash]struct{})
+	for _, tx := range list {
+		if tx.Type() == types.BlobTxType {
+			if directBroadcast {
+				return errors.New("disallowed broadcast blob transaction")
+			} else {
+				// If we receive any blob transactions missing sidecars, or with
+				// sidecars that don't correspond to the versioned hashes reported
+				// in the header, disconnect from the sending peer.
+				if tx.BlobTxSidecar() == nil {
+					return errors.New("received sidecar-less blob transaction")
+				}
+				if err := tx.BlobTxSidecar().ValidateBlobCommitmentHashes(tx.BlobHashes()); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Check for duplicates.
+		hash := tx.Hash()
+		if _, exists := seen[hash]; exists {
+			return fmt.Errorf("multiple copies of the same hash %v", hash)
+		}
+		seen[hash] = struct{}{}
+
+		// Mark as known.
+		peer.MarkTransaction(hash)
+	}
+	return nil
 }
 
 // handleBlockAnnounces is invoked from a peer's message handler when it transmits a
@@ -128,12 +171,13 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, packet *eth.NewBlockPa
 	if sidecars != nil {
 		block = block.WithSidecars(sidecars)
 	}
-
 	// Schedule the block for import
 	log.Debug("handleBlockBroadcast", "peer", peer.ID(), "block", block.Number(), "hash", block.Hash())
 	h.blockFetcher.Enqueue(peer.ID(), block)
 	stats := h.chain.GetBlockStats(block.Hash())
+	blockFirstReceived := false
 	if stats.RecvNewBlockTime.Load() == 0 {
+		blockFirstReceived = true
 		stats.RecvNewBlockTime.Store(time.Now().UnixMilli())
 		addr := peer.RemoteAddr()
 		if addr != nil {
@@ -147,10 +191,16 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, packet *eth.NewBlockPa
 		trueHead = block.ParentHash()
 		trueTD   = new(big.Int).Sub(td, block.Difficulty())
 	)
+	if block.NumberU64() == 1 { // this enable sync with the right peer when starting up a new network
+		trueHead = block.Hash()
+		trueTD = td
+	}
 	// Update the peer's total difficulty if better than the previous
 	if _, td := peer.Head(); trueTD.Cmp(td) > 0 {
 		peer.SetHead(trueHead, trueTD)
-		h.chainSync.handlePeerEvent()
+		if blockFirstReceived {
+			h.chainSync.handlePeerEvent()
+		}
 	}
 	return nil
 }

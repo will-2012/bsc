@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // precompiledTest defines the input/output pairs for precompiled contract tests.
@@ -50,15 +51,16 @@ var allPrecompiles = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{2}):    &sha256hash{},
 	common.BytesToAddress([]byte{3}):    &ripemd160hash{},
 	common.BytesToAddress([]byte{4}):    &dataCopy{},
-	common.BytesToAddress([]byte{5}):    &bigModExp{eip2565: false},
-	common.BytesToAddress([]byte{0xf5}): &bigModExp{eip2565: true},
+	common.BytesToAddress([]byte{5}):    &bigModExp{eip2565: false, eip7883: false},
+	common.BytesToAddress([]byte{0xf5}): &bigModExp{eip2565: true, eip7883: false},
+	common.BytesToAddress([]byte{0xf6}): &bigModExp{eip2565: true, eip7883: true},
 	common.BytesToAddress([]byte{6}):    &bn256AddIstanbul{},
 	common.BytesToAddress([]byte{7}):    &bn256ScalarMulIstanbul{},
 	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
 
-	common.BytesToAddress([]byte{0x01, 0x00}): &p256Verify{},
+	common.BytesToAddress([]byte{0x1, 0x00}):  &p256Verify{eip7951: true},
 	common.BytesToAddress([]byte{0x0f, 0x0a}): &bls12381G1Add{},
 	common.BytesToAddress([]byte{0x0f, 0x0b}): &bls12381G1MultiExp{},
 	common.BytesToAddress([]byte{0x0f, 0x0c}): &bls12381G2Add{},
@@ -99,7 +101,7 @@ func testPrecompiled(addr string, test precompiledTest, t *testing.T) {
 	in := common.Hex2Bytes(test.Input)
 	gas := p.RequiredGas(in)
 	t.Run(fmt.Sprintf("%s-Gas=%d", test.Name, gas), func(t *testing.T) {
-		if res, _, err := RunPrecompiledContract(p, in, gas, nil); err != nil {
+		if res, _, err := RunPrecompiledContract(nil, p, common.HexToAddress(addr), in, NewGasBudget(gas), nil, params.Rules{}); err != nil {
 			t.Error(err)
 		} else if common.Bytes2Hex(res) != test.Expected {
 			t.Errorf("Expected %v, got %v", test.Expected, common.Bytes2Hex(res))
@@ -118,10 +120,10 @@ func testPrecompiled(addr string, test precompiledTest, t *testing.T) {
 func testPrecompiledOOG(addr string, test precompiledTest, t *testing.T) {
 	p := allPrecompiles[common.HexToAddress(addr)]
 	in := common.Hex2Bytes(test.Input)
-	gas := p.RequiredGas(in) - 1
+	gas := test.Gas - 1
 
 	t.Run(fmt.Sprintf("%s-Gas=%d", test.Name, gas), func(t *testing.T) {
-		_, _, err := RunPrecompiledContract(p, in, gas, nil)
+		_, _, err := RunPrecompiledContract(nil, p, common.HexToAddress(addr), in, NewGasBudget(gas), nil, params.Rules{})
 		if err.Error() != "out of gas" {
 			t.Errorf("Expected error [out of gas], got [%v]", err)
 		}
@@ -138,7 +140,7 @@ func testPrecompiledFailure(addr string, test precompiledFailureTest, t *testing
 	in := common.Hex2Bytes(test.Input)
 	gas := p.RequiredGas(in)
 	t.Run(test.Name, func(t *testing.T) {
-		_, _, err := RunPrecompiledContract(p, in, gas, nil)
+		_, _, err := RunPrecompiledContract(nil, p, common.HexToAddress(addr), in, NewGasBudget(gas), nil, params.Rules{})
 		if err.Error() != test.ExpectedError {
 			t.Errorf("Expected error [%v], got [%v]", test.ExpectedError, err)
 		}
@@ -167,12 +169,10 @@ func benchmarkPrecompiled(addr string, test precompiledTest, bench *testing.B) {
 	bench.Run(fmt.Sprintf("%s-Gas=%d", test.Name, reqGas), func(bench *testing.B) {
 		bench.ReportAllocs()
 		start := time.Now()
-		bench.ResetTimer()
-		for i := 0; i < bench.N; i++ {
+		for bench.Loop() {
 			copy(data, in)
-			res, _, err = RunPrecompiledContract(p, data, reqGas, nil)
+			res, _, err = RunPrecompiledContract(nil, p, common.HexToAddress(addr), data, NewGasBudget(reqGas), nil, params.Rules{})
 		}
-		bench.StopTimer()
 		elapsed := uint64(time.Since(start))
 		if elapsed < 1 {
 			elapsed = 1
@@ -251,6 +251,9 @@ func BenchmarkPrecompiledModExp(b *testing.B) { benchJson("modexp", "05", b) }
 func TestPrecompiledModExpEip2565(t *testing.T)      { testJson("modexp_eip2565", "f5", t) }
 func BenchmarkPrecompiledModExpEip2565(b *testing.B) { benchJson("modexp_eip2565", "f5", b) }
 
+func TestPrecompiledModExpEip7883(t *testing.T)      { testJson("modexp_eip7883", "f6", t) }
+func BenchmarkPrecompiledModExpEip7883(b *testing.B) { benchJson("modexp_eip7883", "f6", b) }
+
 // Tests the sample inputs from the elliptic curve addition EIP 213.
 func TestPrecompiledBn256Add(t *testing.T)      { testJson("bn256Add", "06", t) }
 func BenchmarkPrecompiledBn256Add(b *testing.B) { benchJson("bn256Add", "06", b) }
@@ -264,6 +267,30 @@ func TestPrecompiledModExpOOG(t *testing.T) {
 	for _, test := range modexpTests {
 		testPrecompiledOOG("05", test, t)
 	}
+	modexpTestsEIP2565, err := loadJson("modexp_eip2565")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range modexpTestsEIP2565 {
+		testPrecompiledOOG("f5", test, t)
+	}
+	modexpTestsEIP7883, err := loadJson("modexp_eip7883")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range modexpTestsEIP7883 {
+		testPrecompiledOOG("f6", test, t)
+	}
+	gasCostTest := precompiledTest{
+		Input:       "000000000000000000000000000000000000000000000000000000000000082800000000000000000000000000000000000000000000000040000000000000090000000000000000000000000000000000000000000000000000000000000600000000adadadad00000000ff31ff00000006ffffffffffffffffffffffffffffffffffffffff0000000000000004ffffffffffffff0000000000000000000000000000000000000000d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0000001000200fefffeff01000100000000000000ffff01000100ffffffff01000100ffffffff0000050001000100fefffdff02000300ff000000000000012b000000000000090000000000000000000000000000000000000000000000000000ffffff000000000200fffffeff00000001000000000001000200fefffeff010001000000000000000000423034000000000011006161ffbf640053004f00ff00fffffffffffffff3ff00000000000f00002dffffffffff0000000000000000000061999999999999999999999999899961ffffffff0100010000000000000000000000000600000000adadadad00000000ffff00000006fffffdffffffffffffffffffffffffffffffffff0000000000000004ffffffffffffff000000000000000000000000000000000000000098000000966375726c2f66000030000000000011006161ffbf640053004f002d00000000a200000000000000ff1818183fffffffff3a6e756c6c2c22223a6e7500006c2000000000002d2d0000000000000000000144ccef0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080000000000000000fdff000000ff00290001000009000000000000000000000000000000000000000000000000a50004ff2800000000000000000000000000000000000000000000000001000000000000090000000000000000000000030000000000000000002b00000000000000000600000000adadadad00000000ffff00000006ffffffffffffffffffffffffffffffffffffffff0000000000000004ffffffffffffff0000000000000000000000000000000000000000d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d000000000717a1a001a1a1a1a1a1a000000121212121212121212121212121212121212121212d0d0d0d01212121212121212121212121212121212121212121212121212121212121212121212121212121212121212373800002d35373837346137346161610000000000000000d0d0d0d0d0d0d0d0002d3533321a1a000000d0d0d0d0d0d0d0d0d0d0d0d0d0d000000000717a1a001a1a1a1a1a1a000000121212121212121212121212121212121212121212d0d0d0d012121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121a1212121212121212000000000000000000000000d0d0d0d0d0d0d0d0002d3533321a1a0000000000000000000000003300000001000f5b00001100712c6eff9e61000000000061000000fbffff1a1a3a6e353900756c6c7d3b00000000009100002d35ff00600000000000000000002d3533321a1a1a1a3a6e353900756c6c7d3b000000000091373800002d3537383734613734616161d0d0d0d0d000000000717a1a001a1a1a1a1a1a000000121212121212121212121212121212121212121212d0d0d0d012121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121a1212121212121212000000000000000000000000d0d0d0d0d0d0d0d0002d3533321a1a0000000000000000000000003300000001000f5b00001100712c6eff9e61000000000061000000fbffff1a1a3a6e353900756c6c7d3b00000000009100002d35ff00600000000000000000002d3533321a1a1a1a3a6e353900756c6c7d3b000000000091373800002d353738373461373461616100000000000000000000000000000000000000000000000001000000000000090000000000000000000000030000000000000000002b00000000000000000600000000adadadad00000000ffff00000006ffffffffffffffffffffffffffffffffffffffff0000000000000004ffffffffffffff0000000000000000000000000000000000000000d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d000000000717a1a001a1a1a1a1a1a000000121212121212121212121212121212121212121212d0d0d0d01212121212121212121212121212121212121212121212121212121212121212121212121212121212121212373800002d35373837346137346161610000000000000000d0d0d0d0d0d0d0d0002d3533321a1a000000d0d0d0d0d0d0d0d0d0d0d0d0d0d000000000717a1a001a1a1a1a1a1a000000121212121212121212121212121212121212121212d0d0d0d012121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121a1212121212121212000000000000000000000000d0d0d0d0d0d0d0d0002d3533321a1a0000000000000000000000003300000001000f5b00001100712c6eff9e61000000000061000000fbffff1a1a3a6e353900756c6c7d3b00000000009100002d35ff00600000000000000000002d3533321a1a1a1a3a6e353900756c6c7d3b000000000091373800002d3537383734613734616161d0d0d0d0d000000000717a1a001a1a1a1a1a1a0000001212121212121212121212121212121212121212000000000000003300000001000f5b00001100712c6eff9e61000000000061000000fbffff1a1a3a6e353900756c6c7d3b00000000009100002d35ff00600000000000000000002d3533321a1a1a1a3a6e353900756c6c7d3b000000000091373800002d3537383734613734616161",
+		Expected:    "000000000000000000000000000000000000000000000000",
+		Name:        "oss_fuzz_gas_calc",
+		Gas:         18446744073709551615,
+		NoBenchmark: false,
+	}
+	testPrecompiledOOG("05", gasCostTest, t)
+	testPrecompiledOOG("f5", gasCostTest, t)
+	testPrecompiledOOG("f6", gasCostTest, t)
 }
 
 // Tests the sample inputs from the elliptic curve scalar multiplication EIP 213.
@@ -327,6 +354,25 @@ func TestPrecompiledBLS12381MapG2(t *testing.T)      { testJson("blsMapG2", "f10
 
 func TestPrecompiledBlsSignatureVerify(t *testing.T) { testJson("blsSignatureVerify", "66", t) }
 
+func TestActivePrecompiledContractsUsesPasteurVariants(t *testing.T) {
+	rules := params.Rules{IsOsaka: true, IsMendel: true, IsPasteur: true}
+	precompiles := ActivePrecompiledContracts(rules)
+
+	requirePrecompile := func(addr byte) PrecompiledContract {
+		t.Helper()
+
+		precompile, ok := precompiles[common.BytesToAddress([]byte{addr})]
+		if !ok {
+			t.Fatalf("missing precompile 0x%02x", addr)
+		}
+		return precompile
+	}
+
+	if got := requirePrecompile(0x67).Name(); got != "COMET_BFT_LIGHT_BLOCK_VALIDATE_PASTEUR" {
+		t.Fatalf("unexpected Pasteur 0x67 precompile: %s", got)
+	}
+}
+
 func TestPrecompiledPointEvaluation(t *testing.T) { testJson("pointEvaluation", "0a", t) }
 
 func BenchmarkPrecompiledPointEvaluation(b *testing.B) { benchJson("pointEvaluation", "0a", b) }
@@ -387,7 +433,7 @@ func BenchmarkPrecompiledBLS12381G1MultiExpWorstCase(b *testing.B) {
 		Name:        "WorstCaseG1",
 		NoBenchmark: false,
 	}
-	benchmarkPrecompiled("f0c", testcase, b)
+	benchmarkPrecompiled("f0b", testcase, b)
 }
 
 // BenchmarkPrecompiledBLS12381G2MultiExpWorstCase benchmarks the worst case we could find that still fits a gaslimit of 10MGas.
@@ -408,7 +454,7 @@ func BenchmarkPrecompiledBLS12381G2MultiExpWorstCase(b *testing.B) {
 		Name:        "WorstCaseG2",
 		NoBenchmark: false,
 	}
-	benchmarkPrecompiled("f0f", testcase, b)
+	benchmarkPrecompiled("f0d", testcase, b)
 }
 
 // Benchmarks the sample inputs from the P256VERIFY precompile.

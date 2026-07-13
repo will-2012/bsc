@@ -23,8 +23,8 @@ const (
 	// used to avoid of DDOS attack
 	// It's the max number of received votes per second from one peer
 	// 21 validators exist now, so 21 votes will be produced every one block interval
-	// so the limit is 28 = 21/0.75, here set it to 40 with a buffer.
-	receiveRateLimitPerSecond = 40
+	// so the limit is 47 ~= 21/0.45, here set it to 68 with a buffer.
+	receiveRateLimitPerSecond = 68
 
 	// the time span of one period
 	secondsPerPeriod = float64(30)
@@ -124,9 +124,10 @@ func (p *Peer) AsyncSendVotes(votes []*types.VoteEnvelope) {
 	}
 }
 
-// Step into the next period when secondsPerPeriod seconds passed,
-// Otherwise, check whether the number of received votes extra (secondsPerPeriod * receiveRateLimitPerSecond)
-func (p *Peer) IsOverLimitAfterReceiving() bool {
+// IsOverLimitAfterReceivingVotes increments the per-period vote counter by n
+// and reports whether the rolling 30s budget has been exceeded.
+// The budget is `secondsPerPeriod * receiveRateLimitPerSecond` votes per peer.
+func (p *Peer) IsOverLimitAfterReceivingVotes(n uint) bool {
 	if timeInterval := time.Since(p.periodBegin).Seconds(); timeInterval >= secondsPerPeriod {
 		if p.periodCounter > uint(secondsPerPeriod*receiveRateLimitPerSecond) {
 			p.Log().Debug("sending votes too much", "secondsPerPeriod", secondsPerPeriod, "count ", p.periodCounter)
@@ -135,7 +136,7 @@ func (p *Peer) IsOverLimitAfterReceiving() bool {
 		p.periodCounter = 0
 		return false
 	}
-	p.periodCounter += 1
+	p.periodCounter += n
 	return p.periodCounter > uint(secondsPerPeriod*receiveRateLimitPerSecond)
 }
 

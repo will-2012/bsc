@@ -23,6 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
@@ -34,6 +35,10 @@ import (
 const (
 	// softResponseLimit is the target maximum size of replies to data retrievals.
 	softResponseLimit = 2 * 1024 * 1024
+
+	// maxPacketSize is the devp2p message size limit commonly enforced by clients.
+	// Any packet exceeding this limit must be rejected.
+	maxPacketSize = 10 * 1024 * 1024
 
 	// maxHeadersServe is the maximum number of block headers to serve. This number
 	// is there to limit the number of disk lookups.
@@ -87,10 +92,18 @@ type Backend interface {
 type TxPool interface {
 	// Get retrieves the transaction from the local txpool with the given hash.
 	Get(hash common.Hash) *types.Transaction
+
+	// GetRLP retrieves the RLP-encoded transaction from the local txpool with
+	// the given hash.
+	GetRLP(hash common.Hash) []byte
+
+	// GetMetadata returns the transaction type and transaction size with the
+	// given transaction hash.
+	GetMetadata(hash common.Hash) *txpool.TxMetadata
 }
 
 // MakeProtocols constructs the P2P protocol definitions for `eth`.
-func MakeProtocols(backend Backend, network uint64, dnsdisc enode.Iterator) []p2p.Protocol {
+func MakeProtocols(backend Backend, network uint64, disc enode.Iterator) []p2p.Protocol {
 	protocols := make([]p2p.Protocol, 0, len(ProtocolVersions))
 	for _, version := range ProtocolVersions {
 		protocols = append(protocols, p2p.Protocol{
@@ -98,7 +111,7 @@ func MakeProtocols(backend Backend, network uint64, dnsdisc enode.Iterator) []p2
 			Version: version,
 			Length:  protocolLengths[version],
 			Run: func(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-				peer := NewPeer(version, p, rw, backend.TxPool())
+				peer := NewPeer(version, p, rw, backend.TxPool(), backend.Chain().Config())
 				defer peer.Close()
 
 				return backend.RunPeer(peer, func(peer *Peer) error {
@@ -111,7 +124,8 @@ func MakeProtocols(backend Backend, network uint64, dnsdisc enode.Iterator) []p2
 			PeerInfo: func(id enode.ID) interface{} {
 				return backend.PeerInfo(id)
 			},
-			Attributes: []enr.Entry{currentENREntry(backend.Chain())},
+			DialCandidates: disc,
+			Attributes:     []enr.Entry{currentENREntry(backend.Chain())},
 		})
 	}
 	return protocols
@@ -168,10 +182,26 @@ var eth68 = map[uint64]msgHandler{
 	BlockHeadersMsg:               handleBlockHeaders,
 	GetBlockBodiesMsg:             handleGetBlockBodies,
 	BlockBodiesMsg:                handleBlockBodies,
-	GetReceiptsMsg:                handleGetReceipts,
-	ReceiptsMsg:                   handleReceipts,
+	GetReceiptsMsg:                handleGetReceipts68,
+	ReceiptsMsg:                   handleReceipts[*ReceiptList68],
 	GetPooledTransactionsMsg:      handleGetPooledTransactions,
 	PooledTransactionsMsg:         handlePooledTransactions,
+}
+
+var eth70 = map[uint64]msgHandler{
+	NewBlockHashesMsg:             handleNewBlockhashes,
+	NewBlockMsg:                   handleNewBlock,
+	TransactionsMsg:               handleTransactions,
+	NewPooledTransactionHashesMsg: handleNewPooledTransactionHashes,
+	GetBlockHeadersMsg:            handleGetBlockHeaders,
+	BlockHeadersMsg:               handleBlockHeaders,
+	GetBlockBodiesMsg:             handleGetBlockBodies,
+	BlockBodiesMsg:                handleBlockBodies,
+	GetReceiptsMsg:                handleGetReceipts70,
+	ReceiptsMsg:                   handleReceipts70,
+	GetPooledTransactionsMsg:      handleGetPooledTransactions,
+	PooledTransactionsMsg:         handlePooledTransactions,
+	BlockRangeUpdateMsg:           handleBlockRangeUpdate,
 }
 
 // handleMessage is invoked whenever an inbound message is received from a remote
@@ -187,7 +217,15 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 	defer msg.Discard()
 
-	var handlers = eth68
+	var handlers map[uint64]msgHandler
+	switch peer.version {
+	case ETH68:
+		handlers = eth68
+	case ETH70:
+		handlers = eth70
+	default:
+		return fmt.Errorf("unknown eth protocol version: %v", peer.version)
+	}
 
 	// Track the amount of time it takes to serve the request and run the handler
 	if metrics.Enabled() {

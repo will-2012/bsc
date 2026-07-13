@@ -49,6 +49,29 @@ func TestBlockchain(t *testing.T) {
 	// using 4.6 TGas
 	bt.skipLoad(`.*randomStatetest94.json.*`)
 
+	// After the merge we would accept side chains as canonical even if they have lower td
+	bt.skipLoad(`.*bcMultiChainTest/ChainAtoChainB_difficultyB.json`)
+	bt.skipLoad(`.*bcMultiChainTest/CallContractFromNotBestBlock.json`)
+	bt.skipLoad(`.*bcTotalDifficultyTest/uncleBlockAtBlock3afterBlock4.json`)
+	bt.skipLoad(`.*bcTotalDifficultyTest/lotsOfBranchesOverrideAtTheMiddle.json`)
+	bt.skipLoad(`.*bcTotalDifficultyTest/sideChainWithMoreTransactions.json`)
+	bt.skipLoad(`.*bcForkStressTest/ForkStressTest.json`)
+	bt.skipLoad(`.*bcMultiChainTest/lotsOfLeafs.json`)
+	bt.skipLoad(`.*bcFrontierToHomestead/blockChainFrontierWithLargerTDvsHomesteadBlockchain.json`)
+	bt.skipLoad(`.*bcFrontierToHomestead/blockChainFrontierWithLargerTDvsHomesteadBlockchain2.json`)
+
+	// With chain history removal, TDs become unavailable, this transition tests based on TTD are unrunnable
+	bt.skipLoad(`.*bcArrowGlacierToParis/powToPosBlockRejection.json`)
+
+	// This directory contains no test.
+	bt.skipLoad(`.*\.meta/.*`)
+
+	// Broken tests
+	bt.skipLoad(`RevertInCreateInInit`)
+	bt.skipLoad(`InitCollisionParis`)
+	bt.skipLoad(`dynamicAccountOverwriteEmpty_Paris`)
+	bt.skipLoad(`create2collisionStorageParis`)
+
 	bt.walk(t, blockTestDir, func(t *testing.T, name string, test *BlockTest) {
 		execBlockTest(t, bt, test)
 	})
@@ -66,6 +89,15 @@ func TestExecutionSpecBlocktests(t *testing.T) {
 
 	// the deployment is different from go-ethereum
 	bt.skipLoad("^prague/eip2935_historical_block_hashes_from_state/contract_deployment/system_contract_deployment.json")
+	// These tests require us to handle scenarios where a system contract is not deployed at a fork
+	bt.skipLoad(".*prague/eip7251_consolidations/test_system_contract_deployment.json")
+	bt.skipLoad(".*prague/eip7002_el_triggerable_withdrawals/test_system_contract_deployment.json")
+
+	// Broken tests
+	bt.skipLoad(`RevertInCreateInInit`)
+	bt.skipLoad(`InitCollisionParis`)
+	bt.skipLoad(`dynamicAccountOverwriteEmpty_Paris`)
+	bt.skipLoad(`create2collisionStorageParis`)
 
 	bt.walk(t, executionSpecBlockchainTestDir, func(t *testing.T, name string, test *BlockTest) {
 		execBlockTest(t, bt, test)

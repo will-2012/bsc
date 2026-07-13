@@ -42,7 +42,11 @@ import (
 // for releasing state.
 var noopReleaser = tracers.StateReleaseFunc(func() {})
 
-func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, readOnly bool, preferDisk bool) (statedb *state.StateDB, release tracers.StateReleaseFunc, err error) {
+// reexecLimit is the maximum number of ancestor blocks to walk back when
+// attempting to reconstruct missing historical state for hash-scheme nodes.
+const reexecLimit = uint64(128)
+
+func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, base *state.StateDB, readOnly bool, preferDisk bool) (statedb *state.StateDB, release tracers.StateReleaseFunc, err error) {
 	var (
 		current  *types.Block
 		database state.Database
@@ -56,7 +60,7 @@ func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec u
 		// The state is available in live database, create a reference
 		// on top to prevent garbage collection and return a release
 		// function to deref it.
-		if statedb, err = eth.blockchain.StateAt(block.Root()); err == nil {
+		if statedb, err = eth.blockchain.StateAt(block.Header()); err == nil {
 			eth.blockchain.TrieDB().Reference(block.Root(), common.Hash{})
 			return statedb, func() {
 				eth.blockchain.TrieDB().Dereference(block.Root())
@@ -106,7 +110,7 @@ func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec u
 			}
 		}
 		// Database does not have the state for the given block, try to regenerate
-		for i := uint64(0); i < reexec; i++ {
+		for i := uint64(0); i < reexecLimit; i++ {
 			if err := ctx.Err(); err != nil {
 				return nil, nil, err
 			}
@@ -127,7 +131,7 @@ func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec u
 		if err != nil {
 			switch err.(type) {
 			case *trie.MissingNodeError:
-				return nil, nil, fmt.Errorf("required historical state unavailable (reexec=%d)", reexec)
+				return nil, nil, fmt.Errorf("required historical state unavailable (reexec=%d)", reexecLimit)
 			default:
 				return nil, nil, err
 			}
@@ -154,7 +158,7 @@ func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec u
 		if current = eth.blockchain.GetBlockByNumber(next); current == nil {
 			return nil, nil, fmt.Errorf("block #%d not found", next)
 		}
-		_, err := eth.blockchain.Processor().Process(current, statedb, vm.Config{})
+		_, err := eth.blockchain.Processor().Process(ctx, current, statedb, vm.Config{})
 		if err != nil {
 			return nil, nil, fmt.Errorf("processing block %d failed: %v", current.NumberU64(), err)
 		}
@@ -177,29 +181,30 @@ func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec u
 		parent = root
 	}
 	if report {
-		diff, nodes, immutablenodes, imgs := tdb.Size() // all memory is contained within the nodes return in hashdb
-		log.Info("Historical state regenerated", "block", current.NumberU64(), "elapsed", time.Since(start), "layer", diff, "nodes", nodes, "immutablenodes", immutablenodes, "preimages", imgs)
+		diff, nodes, imgs := tdb.Size() // all memory is contained within the nodes return in hashdb
+		log.Info("Historical state regenerated", "block", current.NumberU64(), "elapsed", time.Since(start), "layer", diff, "nodes", nodes, "preimages", imgs)
 	}
 	return statedb, func() { tdb.Dereference(block.Root()) }, nil
 }
 
 func (eth *Ethereum) pathState(block *types.Block) (*state.StateDB, func(), error) {
 	// Check if the requested state is available in the live chain.
-	statedb, err := eth.blockchain.StateAt(block.Root())
+	header := block.Header()
+	statedb, err := eth.blockchain.StateAt(header)
 	if err == nil {
 		return statedb, noopReleaser, nil
 	}
-	// TODO historic state is not supported in path-based scheme.
-	// Fully archive node in pbss will be implemented by relying
-	// on state history, but needs more work on top.
-	return nil, nil, errors.New("historical state not available in path scheme yet")
+	statedb, err = eth.blockchain.HistoricState(header)
+	if err == nil {
+		return statedb, noopReleaser, nil
+	}
+	return nil, nil, errors.New("historical state is not available")
 }
 
 // stateAtBlock retrieves the state database associated with a certain block.
-// If no state is locally available for the given block, a number of blocks
-// are attempted to be reexecuted to generate the desired state. The optional
-// base layer statedb can be provided which is regarded as the statedb of the
-// parent block.
+// If no state is locally available for the given block, up to reexecLimit ancestor
+// blocks are reexecuted to generate the desired state. The optional base layer
+// statedb can be provided which is regarded as the statedb of the parent block.
 //
 // An additional release function will be returned if the requested state is
 // available. Release is expected to be invoked when the returned state is no
@@ -208,7 +213,6 @@ func (eth *Ethereum) pathState(block *types.Block) (*state.StateDB, func(), erro
 //
 // Parameters:
 //   - block:      The block for which we want the state(state = block.Root)
-//   - reexec:     The maximum number of blocks to reprocess trying to obtain the desired state
 //   - base:       If the caller is tracing multiple blocks, the caller can provide the parent
 //     state continuously from the callsite.
 //   - readOnly:   If true, then the live 'blockchain' state database is used. No mutation should
@@ -217,15 +221,21 @@ func (eth *Ethereum) pathState(block *types.Block) (*state.StateDB, func(), erro
 //   - preferDisk: This arg can be used by the caller to signal that even though the 'base' is
 //     provided, it would be preferable to start from a fresh state, if we have it
 //     on disk.
-func (eth *Ethereum) stateAtBlock(ctx context.Context, block *types.Block, reexec uint64, base *state.StateDB, readOnly bool, preferDisk bool) (statedb *state.StateDB, release tracers.StateReleaseFunc, err error) {
+func (eth *Ethereum) stateAtBlock(ctx context.Context, block *types.Block, base *state.StateDB, readOnly bool, preferDisk bool) (statedb *state.StateDB, release tracers.StateReleaseFunc, err error) {
 	if eth.blockchain.TrieDB().Scheme() == rawdb.HashScheme {
-		return eth.hashState(ctx, block, reexec, base, readOnly, preferDisk)
+		return eth.hashState(ctx, block, base, readOnly, preferDisk)
 	}
 	return eth.pathState(block)
 }
 
-// stateAtTransaction returns the execution environment of a certain transaction.
-func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, error) {
+// stateAtTransaction returns the execution environment of a certain
+// transaction.
+//
+// Note: when a block is empty and the state for tx index 0 is requested, this
+// function will return the state of block after the pre-block operations have
+// been completed (e.g. updating system contracts), but before post-block
+// operations are completed (e.g. processing withdrawals).
+func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block, txIndex int) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, error) {
 	// Short circuit if it's genesis block.
 	if block.NumberU64() == 0 {
 		return nil, vm.BlockContext{}, nil, nil, errors.New("no transaction in genesis")
@@ -237,7 +247,7 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 	}
 	// Lookup the statedb of parent block from the live database,
 	// otherwise regenerate it on the flight.
-	statedb, release, err := eth.stateAtBlock(ctx, parent, reexec, nil, true, false)
+	statedb, release, err := eth.stateAtBlock(ctx, parent, nil, true, false)
 	if err != nil {
 		return nil, vm.BlockContext{}, nil, nil, err
 	}
@@ -246,6 +256,7 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 	// Insert parent beacon block root in the state as per EIP-4788.
 	context := core.NewEVMBlockContext(block.Header(), eth.blockchain, nil)
 	evm := vm.NewEVM(context, statedb, eth.blockchain.Config(), vm.Config{})
+	defer evm.Release()
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
 	}
@@ -254,7 +265,7 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 	if txIndex == 0 && len(block.Transactions()) == 0 {
-		return nil, vm.BlockContext{}, statedb, release, nil
+		return nil, context, statedb, release, nil
 	}
 	// Recompute transactions up to the target index.
 	var (
@@ -283,10 +294,13 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		}
 		// Assemble the transaction call message and return if the requested offset
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
+		if !beforeSystemTx {
+			msg.SkipTransactionChecks = true
+		}
 
 		// Not yet the searched for transaction, execute on top of the current state
 		statedb.SetTxContext(tx.Hash(), idx)
-		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
+		if _, err := core.ApplyMessage(evm, msg, nil); err != nil {
 			return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}
 		// Ensure any modifications are committed to the state

@@ -19,6 +19,7 @@ package snapshot
 import (
 	"bytes"
 	crand "crypto/rand"
+	"maps"
 	"math/rand"
 	"testing"
 
@@ -30,9 +31,7 @@ import (
 
 func copyAccounts(accounts map[common.Hash][]byte) map[common.Hash][]byte {
 	copy := make(map[common.Hash][]byte)
-	for hash, blob := range accounts {
-		copy[hash] = blob
-	}
+	maps.Copy(copy, accounts)
 	return copy
 }
 
@@ -40,9 +39,7 @@ func copyStorage(storage map[common.Hash]map[common.Hash][]byte) map[common.Hash
 	copy := make(map[common.Hash]map[common.Hash][]byte)
 	for accHash, slots := range storage {
 		copy[accHash] = make(map[common.Hash][]byte)
-		for slotHash, blob := range slots {
-			copy[accHash][slotHash] = blob
-		}
+		maps.Copy(copy[accHash], slots)
 	}
 	return copy
 }
@@ -198,6 +195,39 @@ func TestInsertAndMerge(t *testing.T) {
 	}
 }
 
+// TestStorageListMemoryAccounting ensures that StorageList increases dl.memory
+// proportionally to the number of storage slots in the requested account and
+// does not change memory usage on repeated calls for the same account.
+func TestStorageListMemoryAccounting(t *testing.T) {
+	parent := newDiffLayer(emptyLayer(), common.Hash{}, nil, nil)
+	account := common.HexToHash("0x01")
+
+	slots := make(map[common.Hash][]byte)
+	for i := 0; i < 3; i++ {
+		slots[randomHash()] = []byte{0x01}
+	}
+	storage := map[common.Hash]map[common.Hash][]byte{
+		account: slots,
+	}
+	dl := newDiffLayer(parent, common.Hash{}, nil, storage)
+
+	before := dl.memory
+	list := dl.StorageList(account)
+	if have, want := len(list), len(slots); have != want {
+		t.Fatalf("StorageList length mismatch: have %d, want %d", have, want)
+	}
+	expectedDelta := uint64(len(list)*common.HashLength + common.HashLength)
+	if have, want := dl.memory-before, expectedDelta; have != want {
+		t.Fatalf("StorageList memory delta mismatch: have %d, want %d", have, want)
+	}
+
+	before = dl.memory
+	_ = dl.StorageList(account)
+	if dl.memory != before {
+		t.Fatalf("StorageList changed memory on cached call: have %d, want %d", dl.memory, before)
+	}
+}
+
 func emptyLayer() *diskLayer {
 	return &diskLayer{
 		diskdb: memorydb.New(),
@@ -229,8 +259,7 @@ func BenchmarkSearch(b *testing.B) {
 		layer = fill(layer)
 	}
 	key := crypto.Keccak256Hash([]byte{0x13, 0x38})
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		layer.AccountRLP(key)
 	}
 }
@@ -269,8 +298,7 @@ func BenchmarkSearchSlot(b *testing.B) {
 	for i := 0; i < 128; i++ {
 		layer = fill(layer)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		layer.Storage(accountKey, storageKey)
 	}
 }
@@ -300,9 +328,7 @@ func BenchmarkFlatten(b *testing.B) {
 		}
 		return newDiffLayer(parent, common.Hash{}, accounts, storage)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		b.StopTimer()
+	for b.Loop() {
 		var layer snapshot
 		layer = emptyLayer()
 		for i := 1; i < 128; i++ {
@@ -352,9 +378,7 @@ func BenchmarkJournal(b *testing.B) {
 	for i := 1; i < 128; i++ {
 		layer = fill(layer)
 	}
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		layer.Journal(new(bytes.Buffer))
 	}
 }

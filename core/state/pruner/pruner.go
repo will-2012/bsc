@@ -27,14 +27,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/holiman/uint256"
-
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
-	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
@@ -124,109 +119,6 @@ func NewPruner(db ethdb.Database, config Config, triesInMemory uint64) (*Pruner,
 	}, nil
 }
 
-func NewAllPruner(db ethdb.Database) (*Pruner, error) {
-	headBlock := rawdb.ReadHeadBlock(db)
-	if headBlock == nil {
-		return nil, errors.New("Failed to load head block")
-	}
-	return &Pruner{
-		db: db,
-	}, nil
-}
-
-func (p *Pruner) PruneAll(genesis *core.Genesis) error {
-	return p.pruneAll(p.db, genesis)
-}
-
-func (p *Pruner) pruneAll(maindb ethdb.Database, g *core.Genesis) error {
-	var pruneDB ethdb.Database
-	if maindb != nil && maindb.StateStore() != nil {
-		pruneDB = maindb.StateStore()
-	} else {
-		pruneDB = maindb
-	}
-	var (
-		count  int
-		size   common.StorageSize
-		pstart = time.Now()
-		logged = time.Now()
-		batch  = pruneDB.NewBatch()
-		iter   = pruneDB.NewIterator(nil, nil)
-	)
-	start := time.Now()
-	for iter.Next() {
-		key := iter.Key()
-		if len(key) == common.HashLength {
-			count += 1
-			size += common.StorageSize(len(key) + len(iter.Value()))
-			batch.Delete(key)
-
-			var eta time.Duration // Realistically will never remain uninited
-			if done := binary.BigEndian.Uint64(key[:8]); done > 0 {
-				var (
-					left  = math.MaxUint64 - binary.BigEndian.Uint64(key[:8])
-					speed = done/uint64(time.Since(pstart)/time.Millisecond+1) + 1 // +1s to avoid division by zero
-				)
-				eta = time.Duration(left/speed) * time.Millisecond
-			}
-			if time.Since(logged) > 8*time.Second {
-				log.Info("Pruning state data", "nodes", count, "size", size,
-					"elapsed", common.PrettyDuration(time.Since(pstart)), "eta", common.PrettyDuration(eta))
-				logged = time.Now()
-			}
-			// Recreate the iterator after every batch commit in order
-			// to allow the underlying compactor to delete the entries.
-			if batch.ValueSize() >= ethdb.IdealBatchSize {
-				batch.Write()
-				batch.Reset()
-
-				iter.Release()
-				iter = pruneDB.NewIterator(nil, key)
-			}
-		}
-	}
-	if batch.ValueSize() > 0 {
-		batch.Write()
-		batch.Reset()
-	}
-	iter.Release()
-	log.Info("Pruned state data", "nodes", count, "size", size, "elapsed", common.PrettyDuration(time.Since(pstart)))
-
-	// Start compactions, will remove the deleted data from the disk immediately.
-	// Note for small pruning, the compaction is skipped.
-	if count >= rangeCompactionThreshold {
-		cstart := time.Now()
-		for b := 0x00; b <= 0xf0; b += 0x10 {
-			var (
-				start = []byte{byte(b)}
-				end   = []byte{byte(b + 0x10)}
-			)
-			if b == 0xf0 {
-				end = nil
-			}
-			log.Info("Compacting database", "range", fmt.Sprintf("%#x-%#x", start, end), "elapsed", common.PrettyDuration(time.Since(cstart)))
-			if err := pruneDB.Compact(start, end); err != nil {
-				log.Error("Database compaction failed", "error", err)
-				return err
-			}
-		}
-		log.Info("Database compaction finished", "elapsed", common.PrettyDuration(time.Since(cstart)))
-	}
-	statedb, _ := state.New(common.Hash{}, state.NewDatabase(triedb.NewDatabase(maindb, nil), p.snaptree))
-	for addr, account := range g.Alloc {
-		statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceChangeUnspecified)
-		statedb.SetCode(addr, account.Code)
-		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
-		for key, value := range account.Storage {
-			statedb.SetState(addr, key, value)
-		}
-	}
-	root, _ := statedb.Commit(0, false, false)
-	statedb.Database().TrieDB().Commit(root, true)
-	log.Info("State pruning successful", "pruned", size, "elapsed", common.PrettyDuration(time.Since(start)))
-	return nil
-}
-
 func prune(snaptree *snapshot.Tree, root common.Hash, maindb ethdb.Database, stateBloom *stateBloom, bloomPath string, middleStateRoots map[common.Hash]struct{}, start time.Time) error {
 	// Delete all stale trie nodes in the disk. With the help of state bloom
 	// the trie nodes(and codes) belong to the active state will be filtered
@@ -235,19 +127,13 @@ func prune(snaptree *snapshot.Tree, root common.Hash, maindb ethdb.Database, sta
 	// that the false-positive is low enough(~0.05%). The probability of the
 	// dangling node is the state root is super low. So the dangling nodes in
 	// theory will never ever be visited again.
-	var pruneDB ethdb.Database
-	if maindb != nil && maindb.StateStore() != nil {
-		pruneDB = maindb.StateStore()
-	} else {
-		pruneDB = maindb
-	}
 	var (
 		skipped, count int
 		size           common.StorageSize
 		pstart         = time.Now()
 		logged         = time.Now()
-		batch          = pruneDB.NewBatch()
-		iter           = pruneDB.NewIterator(nil, nil)
+		batch          = maindb.NewBatch()
+		iter           = maindb.NewIterator(nil, nil)
 	)
 	for iter.Next() {
 		key := iter.Key()
@@ -276,11 +162,8 @@ func prune(snaptree *snapshot.Tree, root common.Hash, maindb ethdb.Database, sta
 
 			var eta time.Duration // Realistically will never remain uninited
 			if done := binary.BigEndian.Uint64(key[:8]); done > 0 {
-				var (
-					left  = math.MaxUint64 - binary.BigEndian.Uint64(key[:8])
-					speed = done/uint64(time.Since(pstart)/time.Millisecond+1) + 1 // +1s to avoid division by zero
-				)
-				eta = time.Duration(left/speed) * time.Millisecond
+				left := math.MaxUint64 - binary.BigEndian.Uint64(key[:8])
+				eta = common.CalculateETA(done, left, time.Since(pstart))
 			}
 			if time.Since(logged) > 8*time.Second {
 				log.Info("Pruning state data", "nodes", count, "skipped", skipped, "size", size,
@@ -294,7 +177,7 @@ func prune(snaptree *snapshot.Tree, root common.Hash, maindb ethdb.Database, sta
 				batch.Reset()
 
 				iter.Release()
-				iter = pruneDB.NewIterator(nil, key)
+				iter = maindb.NewIterator(nil, key)
 			}
 		}
 	}
@@ -339,7 +222,7 @@ func prune(snaptree *snapshot.Tree, root common.Hash, maindb ethdb.Database, sta
 				end = nil
 			}
 			log.Info("Compacting database", "range", fmt.Sprintf("%#x-%#x", start, end), "elapsed", common.PrettyDuration(time.Since(cstart)))
-			if err := pruneDB.Compact(start, end); err != nil {
+			if err := maindb.Compact(start, end); err != nil {
 				log.Error("Database compaction failed", "error", err)
 				return err
 			}
@@ -384,17 +267,10 @@ func (p *Pruner) Prune(root common.Hash) error {
 		// Use the bottom-most diff layer as the target
 		root = layers[len(layers)-1].Root()
 	}
-	// if the separated state db has been set, use this db to prune data
-	var trienodedb ethdb.Database
-	if p.db != nil && p.db.StateStore() != nil {
-		trienodedb = p.db.StateStore()
-	} else {
-		trienodedb = p.db
-	}
 	// Ensure the root is really present. The weak assumption
 	// is the presence of root can indicate the presence of the
 	// entire trie.
-	if !rawdb.HasLegacyTrieNode(trienodedb, root) {
+	if !rawdb.HasLegacyTrieNode(p.db, root) {
 		// The special case is for clique based networks, it's possible
 		// that two consecutive blocks will have same root. In this case
 		// snapshot difflayer won't be created. So HEAD-127 may not paired
@@ -407,7 +283,7 @@ func (p *Pruner) Prune(root common.Hash) error {
 		// as the pruning target.
 		var found bool
 		for i := len(layers) - 2; i >= 2; i-- {
-			if rawdb.HasLegacyTrieNode(trienodedb, layers[i].Root()) {
+			if rawdb.HasLegacyTrieNode(p.db, layers[i].Root()) {
 				root = layers[i].Root()
 				found = true
 				log.Info("Selecting middle-layer as the pruning target", "root", root, "depth", i)
@@ -415,7 +291,7 @@ func (p *Pruner) Prune(root common.Hash) error {
 			}
 		}
 		if !found {
-			if blob := rawdb.ReadLegacyTrieNode(trienodedb, p.snaptree.DiskRoot()); len(blob) != 0 {
+			if blob := rawdb.ReadLegacyTrieNode(p.db, p.snaptree.DiskRoot()); len(blob) != 0 {
 				root = p.snaptree.DiskRoot()
 				found = true
 				log.Info("Selecting disk-layer as the pruning target", "root", root)

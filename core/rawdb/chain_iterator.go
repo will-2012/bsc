@@ -17,6 +17,7 @@
 package rawdb
 
 import (
+	"encoding/binary"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -35,24 +36,24 @@ import (
 // injects into the database the block hash->number mappings.
 func InitDatabaseFromFreezer(db ethdb.Database) {
 	// If we can't access the freezer or it's empty, abort
-	frozen, err := db.BlockStore().ItemAmountInAncient()
+	frozen, err := db.Ancients()
 	if err != nil || frozen == 0 {
 		return
 	}
 	var (
-		batch  = db.BlockStore().NewBatch()
+		batch  = db.NewBatch()
 		start  = time.Now()
 		logged = start.Add(-7 * time.Second) // Unindex during import is fast, don't double log
 		hash   common.Hash
-		offset = db.BlockStore().AncientOffSet()
 	)
+	offset, _ := db.Tail()
 	for i := uint64(0) + offset; i < frozen+offset; i++ {
 		// We read 100K hashes at a time, for a total of 3.2M
 		count := uint64(100_000)
 		if i+count > frozen+offset {
 			count = frozen + offset - i
 		}
-		data, err := db.BlockStore().AncientRange(ChainFreezerHashTable, i, count, 32*count)
+		data, err := db.AncientRange(ChainFreezerHashTable, i, count, 32*count)
 		if err != nil {
 			log.Crit("Failed to init database from freezer", "err", err)
 		}
@@ -80,14 +81,15 @@ func InitDatabaseFromFreezer(db ethdb.Database) {
 	}
 	batch.Reset()
 
-	WriteHeadHeaderHash(db.BlockStore(), hash)
-	WriteHeadFastBlockHash(db.BlockStore(), hash)
+	WriteHeadHeaderHash(db, hash)
+	WriteHeadFastBlockHash(db, hash)
 	log.Info("Initialized database from freezer", "blocks", frozen, "elapsed", common.PrettyDuration(time.Since(start)))
 }
 
 type blockTxHashes struct {
 	number uint64
 	hashes []common.Hash
+	err    error
 }
 
 // iterateTransactions iterates over all transactions in the (canon) block
@@ -100,7 +102,7 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		number uint64
 		rlp    rlp.RawValue
 	}
-	if offset := db.BlockStore().AncientOffSet(); offset > from {
+	if offset, _ := db.Tail(); offset > from {
 		from = offset
 	}
 	if to <= from {
@@ -122,7 +124,7 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		}
 		defer close(rlpCh)
 		for n != end {
-			data := ReadCanonicalBodyRLP(db, n)
+			data := ReadCanonicalBodyRLP(db, n, nil)
 			// Feed the block to the aggregator, or abort on interrupt
 			select {
 			case rlpCh <- &numberRlp{n, data}:
@@ -148,17 +150,22 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 		}()
 		for data := range rlpCh {
 			var body types.Body
+			var result *blockTxHashes
 			if err := rlp.DecodeBytes(data.rlp, &body); err != nil {
 				log.Warn("Failed to decode block body", "block", data.number, "error", err)
-				return
-			}
-			var hashes []common.Hash
-			for _, tx := range body.Transactions {
-				hashes = append(hashes, tx.Hash())
-			}
-			result := &blockTxHashes{
-				hashes: hashes,
-				number: data.number,
+				result = &blockTxHashes{
+					number: data.number,
+					err:    err,
+				}
+			} else {
+				hashes := make([]common.Hash, len(body.Transactions))
+				for i, tx := range body.Transactions {
+					hashes[i] = tx.Hash()
+				}
+				result = &blockTxHashes{
+					hashes: hashes,
+					number: data.number,
+				}
 			}
 			// Feed the block to the aggregator, or abort on interrupt
 			select {
@@ -187,7 +194,7 @@ func iterateTransactions(db ethdb.Database, from uint64, to uint64, reverse bool
 // signal received.
 func indexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan struct{}, hook func(uint64) bool, report bool) {
 	// short circuit for invalid range
-	if offset := db.BlockStore().AncientOffSet(); offset > from {
+	if offset, _ := db.Tail(); offset > from {
 		from = offset
 	}
 	if from >= to {
@@ -223,6 +230,10 @@ func indexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan
 			// Next block available, pop it off and index it
 			delivery := queue.PopItem()
 			lastNum = delivery.number
+			if delivery.err != nil {
+				log.Warn("Skipping tx indexing for block with missing/corrupt body", "block", delivery.number, "error", delivery.err)
+				continue
+			}
 			WriteTxLookupEntries(batch, delivery.number, delivery.hashes)
 			blocks++
 			txs += len(delivery.hashes)
@@ -286,7 +297,7 @@ func indexTransactionsForTesting(db ethdb.Database, from uint64, to uint64, inte
 // signal received.
 func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt chan struct{}, hook func(uint64) bool, report bool) {
 	// short circuit for invalid range
-	if offset := db.BlockStore().AncientOffSet(); offset > from {
+	if offset, _ := db.Tail(); offset > from {
 		from = offset
 	}
 	if from >= to {
@@ -319,6 +330,10 @@ func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 			}
 			delivery := queue.PopItem()
 			nextNum = delivery.number + 1
+			if delivery.err != nil {
+				log.Warn("Skipping tx unindexing for block with missing/corrupt body", "block", delivery.number, "error", delivery.err)
+				continue
+			}
 			DeleteTxLookupEntries(batch, delivery.hashes)
 			txs += len(delivery.hashes)
 			blocks++
@@ -355,9 +370,9 @@ func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 	}
 	select {
 	case <-interrupt:
-		logger("Transaction unindexing interrupted", "blocks", blocks, "txs", txs, "tail", to, "elapsed", common.PrettyDuration(time.Since(start)))
+		logger("Transaction unindexing interrupted", "blocks", blocks, "txs", txs, "tail", nextNum, "elapsed", common.PrettyDuration(time.Since(start)))
 	default:
-		logger("Unindexed transactions", "blocks", blocks, "txs", txs, "tail", to, "elapsed", common.PrettyDuration(time.Since(start)))
+		logger("Unindexed transactions", "blocks", blocks, "txs", txs, "tail", nextNum, "elapsed", common.PrettyDuration(time.Since(start)))
 	}
 }
 
@@ -373,4 +388,39 @@ func UnindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 // unindexTransactionsForTesting is the internal debug version with an additional hook.
 func unindexTransactionsForTesting(db ethdb.Database, from uint64, to uint64, interrupt chan struct{}, hook func(uint64) bool) {
 	unindexTransactions(db, from, to, interrupt, hook, false)
+}
+
+// PruneTransactionIndex removes all tx index entries below a certain block number.
+func PruneTransactionIndex(db ethdb.Database, pruneBlock uint64) {
+	tail := ReadTxIndexTail(db)
+	if tail == nil || *tail > pruneBlock {
+		return // no index, or index ends above pruneBlock
+	}
+	// There are blocks below pruneBlock in the index. Iterate the entire index to remove
+	// their entries. Note if this fails, the index is messed up, but tail still points to
+	// the old tail.
+	var count, removed int
+	DeleteAllTxLookupEntries(db, func(txhash common.Hash, v []byte) bool {
+		count++
+		if count%10000000 == 0 {
+			log.Info("Pruning tx index", "count", count, "removed", removed)
+		}
+		if len(v) > 8 {
+			log.Error("Skipping legacy tx index entry", "hash", txhash)
+			return false
+		}
+		bn := decodeNumber(v)
+		if bn < pruneBlock {
+			removed++
+			return true
+		}
+		return false
+	})
+	WriteTxIndexTail(db, pruneBlock)
+}
+
+func decodeNumber(b []byte) uint64 {
+	var numBuffer [8]byte
+	copy(numBuffer[8-len(b):], b)
+	return binary.BigEndian.Uint64(numBuffer[:])
 }

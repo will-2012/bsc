@@ -17,11 +17,42 @@
 package vm
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
+
+// CheckMaxInitCodeSize checks the size of contract initcode against the protocol-defined limit.
+func CheckMaxInitCodeSize(rules *params.Rules, size uint64) error {
+	if rules.IsAmsterdam {
+		if size > params.MaxInitCodeSizeAmsterdam {
+			return fmt.Errorf("%w: code size %v limit %v", ErrMaxInitCodeSizeExceeded, size, params.MaxInitCodeSizeAmsterdam)
+		}
+	} else if rules.IsShanghai {
+		if size > params.MaxInitCodeSize {
+			return fmt.Errorf("%w: code size %v limit %v", ErrMaxInitCodeSizeExceeded, size, params.MaxInitCodeSize)
+		}
+	}
+
+	return nil
+}
+
+// CheckMaxCodeSize checks the size of contract code against the protocol-defined limit.
+func CheckMaxCodeSize(rules *params.Rules, size uint64) error {
+	if rules.IsAmsterdam {
+		if size > params.MaxCodeSizeAmsterdam {
+			return fmt.Errorf("%w: code size %v limit %v", ErrMaxCodeSizeExceeded, size, params.MaxCodeSizeAmsterdam)
+		}
+	} else if rules.IsEIP158 {
+		if size > params.MaxCodeSize {
+			return fmt.Errorf("%w: code size %v limit %v", ErrMaxCodeSizeExceeded, size, params.MaxCodeSize)
+		}
+	}
+	return nil
+}
 
 // calcMemSize64 calculates the required memory size, and returns
 // the size and whether the result overflowed uint64
@@ -57,10 +88,7 @@ func getData(data []byte, start uint64, size uint64) []byte {
 	if start > length {
 		start = length
 	}
-	end := start + size
-	if end > length {
-		end = length
-	}
+	end := min(start+size, length)
 	return common.RightPadBytes(data[start:end], int(size))
 }
 
@@ -69,10 +97,7 @@ func getDataAndAdjustedBounds(data []byte, start uint64, size uint64) (codeCopyP
 	if start > length {
 		start = length
 	}
-	end := start + size
-	if end > length {
-		end = length
-	}
+	end := min(start+size, length)
 	return common.RightPadBytes(data[start:end], int(size)), start, end - start
 }
 
@@ -83,13 +108,4 @@ func toWordSize(size uint64) uint64 {
 	}
 
 	return (size + 31) / 32
-}
-
-func allZero(b []byte) bool {
-	for _, byte := range b {
-		if byte != 0 {
-			return false
-		}
-	}
-	return true
 }

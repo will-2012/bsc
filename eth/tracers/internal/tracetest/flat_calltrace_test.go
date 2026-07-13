@@ -77,11 +77,8 @@ type flatCallTraceResult struct {
 
 // flatCallTracerTest defines a single test to check the call tracer against.
 type flatCallTracerTest struct {
-	Genesis      *core.Genesis   `json:"genesis"`
-	Context      *callContext    `json:"context"`
-	Input        string          `json:"input"`
-	TracerConfig json.RawMessage `json:"tracerConfig"`
-	Result       []flatCallTrace `json:"result"`
+	tracerTestEnv
+	Result []flatCallTrace `json:"result"`
 }
 
 func flatCallTracerTestRunner(tracerName string, filename string, dirPath string, t testing.TB) error {
@@ -116,7 +113,7 @@ func flatCallTracerTestRunner(tracerName string, filename string, dirPath string
 	}
 	evm := vm.NewEVM(context, state.StateDB, test.Genesis.Config, vm.Config{Tracer: tracer.Hooks})
 	tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
-	vmRet, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas()))
+	vmRet, err := core.ApplyMessage(evm, msg, nil)
 	if err != nil {
 		return fmt.Errorf("failed to execute transaction: %v", err)
 	}
@@ -204,7 +201,7 @@ func BenchmarkFlatCallTracer(b *testing.B) {
 	for _, file := range files {
 		filename := strings.TrimPrefix(file, "testdata/call_tracer_flat/")
 		b.Run(camel(strings.TrimSuffix(filename, ".json")), func(b *testing.B) {
-			for n := 0; n < b.N; n++ {
+			for b.Loop() {
 				err := flatCallTracerTestRunner("flatCallTracer", filename, "call_tracer_flat", b)
 				if err != nil {
 					b.Fatal(err)

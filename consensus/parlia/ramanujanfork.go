@@ -12,7 +12,7 @@ import (
 const (
 	wiggleTimeBeforeFork       = 500 * time.Millisecond // Random delay (per signer) to allow concurrent signers
 	fixedBackOffTimeBeforeFork = 200 * time.Millisecond
-	millisecondsUnit           = 250 // not enforced at the consensus level
+	millisecondsUnit           = 50 // not enforced at the consensus level
 )
 
 func (p *Parlia) delayForRamanujanFork(snap *Snapshot, header *types.Header) time.Duration {
@@ -31,7 +31,7 @@ func (p *Parlia) delayForRamanujanFork(snap *Snapshot, header *types.Header) tim
 func (p *Parlia) blockTimeForRamanujanFork(snap *Snapshot, header, parent *types.Header) uint64 {
 	blockTime := parent.MilliTimestamp() + snap.BlockInterval
 	if p.chainConfig.IsRamanujan(header.Number) {
-		blockTime = blockTime + p.backOffTime(snap, parent, header, p.val)
+		blockTime = blockTime + p.backOffTime(snap, parent, header, header.Coinbase)
 	}
 	if now := uint64(time.Now().UnixMilli()); blockTime < now {
 		// Just to make the millisecond part of the time look more aligned.

@@ -15,7 +15,6 @@
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
 //go:build gofuzz
-// +build gofuzz
 
 package signify
 
@@ -56,7 +55,7 @@ func Fuzz(data []byte) int {
 	fmt.Printf("untrusted: %v\n", untrustedComment)
 	fmt.Printf("trusted: %v\n", trustedComment)
 
-	err = SignifySignFile(tmpFile.Name(), tmpFile.Name()+".sig", testSecKey, untrustedComment, trustedComment)
+	err = SignFile(tmpFile.Name(), tmpFile.Name()+".sig", testSecKey, untrustedComment, trustedComment)
 	if err != nil {
 		panic(err)
 	}
@@ -68,7 +67,7 @@ func Fuzz(data []byte) int {
 		signify = path
 	}
 
-	_, err := exec.LookPath(signify)
+	_, err = exec.LookPath(signify)
 	if err != nil {
 		panic(err)
 	}

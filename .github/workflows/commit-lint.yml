@@ -19,13 +19,13 @@ jobs:
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v3
+      - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: |
             ~/.npm
@@ -35,8 +35,8 @@ jobs:
             ${{ runner.os }}-node-
       - name: Install Deps
         run: |
-          npm install -g commitlint-plugin-function-rules @commitlint/cli
-          npm install --save-dev commitlint-plugin-function-rules @commitlint/cli
+          npm install -g commitlint-plugin-function-rules@2 @commitlint/cli@18 @commitlint/config-conventional@18
+          npm install --save-dev commitlint-plugin-function-rules@2 @commitlint/cli@18 @commitlint/config-conventional@18
       - uses: wagoid/commitlint-github-action@v5
         id: commitlint
         env:

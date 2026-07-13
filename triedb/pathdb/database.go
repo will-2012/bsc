@@ -17,46 +17,25 @@
 package pathdb
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/pebble"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/trie/bintrie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
-	"github.com/ethereum/go-verkle"
-)
-
-const (
-	// defaultCleanSize is the default memory allowance of clean cache.
-	defaultCleanSize = 16 * 1024 * 1024
-
-	// MaxDirtyBufferSize is the maximum memory allowance of node buffer.
-	// Too large buffer will cause the system to pause for a long
-	// time when write happens. Also, the largest batch that pebble can
-	// support is 4GB, node will panic if batch size exceeds this limit.
-	MaxDirtyBufferSize = 256 * 1024 * 1024
-
-	// defaultDirtyBufferSize is the default memory allowance of node buffer
-	// that aggregates the writes from above until it's flushed into the
-	// disk. It's meant to be used once the initial sync is finished.
-	// Do not increase the buffer size arbitrarily, otherwise the system
-	// pause time will increase when the database writes happen.
-	defaultDirtyBufferSize = 64 * 1024 * 1024
-
-	// DefaultBackgroundFlushInterval defines the default the wait interval
-	// that background node cache flush disk.
-	DefaultBackgroundFlushInterval = 3
 )
 
 type JournalType int
@@ -66,10 +45,9 @@ const (
 	JournalFileType
 )
 
-var (
-	// maxDiffLayers is the maximum diff layers allowed in the layer tree.
-	maxDiffLayers = 128
-)
+func MaxDirtyBufferSize() int {
+	return maxBufferSize
+}
 
 // layer is the interface implemented by all state layers which includes some
 // public methods and some additional methods for internal usage.
@@ -78,9 +56,10 @@ type layer interface {
 	// if the read operation exits abnormally. Specifically, if the layer is
 	// already stale.
 	//
-	// Note, no error will be returned if the requested node is not found in database.
-	// Note, the hash parameter can access the diff-layer flat cache to speed up access.
-	node(owner common.Hash, path []byte, hash common.Hash, depth int) ([]byte, common.Hash, *nodeLoc, error)
+	// Note:
+	// - the returned node is not a copy, please don't modify it.
+	// - no error will be returned if the requested node is not found in database.
+	node(owner common.Hash, path []byte, depth int) ([]byte, common.Hash, nodeLoc, error)
 
 	// account directly retrieves the account RLP associated with a particular
 	// hash in the slim data format. An error will be returned if the read
@@ -113,58 +92,13 @@ type layer interface {
 	// the provided dirty trie nodes along with the state change set.
 	//
 	// Note, the maps are retained by the method to avoid copying everything.
-	update(root common.Hash, id uint64, block uint64, nodes *nodeSet, states *StateSetWithOrigin) *diffLayer
+	update(root common.Hash, id uint64, block uint64, nodes *nodeSetWithOrigin, states *StateSetWithOrigin) *diffLayer
 
 	// journal commits an entire diff hierarchy to disk into a single journal entry.
 	// This is meant to be used during shutdown to persist the layer without
 	// flattening everything down (bad for reorgs).
-	journal(w io.Writer, journalType JournalType) error
+	journal(w io.Writer) error
 }
-
-// Config contains the settings for database.
-type Config struct {
-	SyncFlush       bool   // Flag of trienodebuffer sync flush cache to disk
-	StateHistory    uint64 // Number of recent blocks to maintain state history for
-	CleanCacheSize  int    // Maximum memory allowance (in bytes) for caching clean nodes
-	WriteBufferSize int    // Maximum memory allowance (in bytes) for write buffer
-	ReadOnly        bool   // Flag whether the database is opened in read only mode.
-	NoTries         bool
-	JournalFilePath string
-	JournalFile     bool
-}
-
-// sanitize checks the provided user configurations and changes anything that's
-// unreasonable or unworkable.
-func (c *Config) sanitize() *Config {
-	conf := *c
-	if conf.WriteBufferSize > MaxDirtyBufferSize {
-		log.Warn("Sanitizing invalid node buffer size", "provided", common.StorageSize(conf.WriteBufferSize), "updated", common.StorageSize(MaxDirtyBufferSize))
-		conf.WriteBufferSize = MaxDirtyBufferSize
-	}
-	return &conf
-}
-
-// fields returns a list of attributes of config for printing.
-func (c *Config) fields() []interface{} {
-	var list []interface{}
-	if c.ReadOnly {
-		list = append(list, "readonly", true)
-	}
-	list = append(list, "cache", common.StorageSize(c.CleanCacheSize))
-	list = append(list, "buffer", common.StorageSize(c.WriteBufferSize))
-	list = append(list, "history", c.StateHistory)
-	return list
-}
-
-// Defaults contains default settings for Ethereum mainnet.
-var Defaults = &Config{
-	StateHistory:    params.FullImmutabilityThreshold,
-	CleanCacheSize:  defaultCleanSize,
-	WriteBufferSize: defaultDirtyBufferSize,
-}
-
-// ReadOnly is the config in order to open database in read only mode.
-var ReadOnly = &Config{ReadOnly: true}
 
 // nodeHasher is the function to compute the hash of supplied node blob.
 type nodeHasher func([]byte) (common.Hash, error)
@@ -177,16 +111,12 @@ func merkleNodeHasher(blob []byte) (common.Hash, error) {
 	return crypto.Keccak256Hash(blob), nil
 }
 
-// verkleNodeHasher computes the hash of the given verkle node.
-func verkleNodeHasher(blob []byte) (common.Hash, error) {
+// binaryNodeHasher computes the hash of the given verkle node.
+func binaryNodeHasher(blob []byte) (common.Hash, error) {
 	if len(blob) == 0 {
-		return types.EmptyVerkleHash, nil
+		return types.EmptyBinaryHash, nil
 	}
-	n, err := verkle.ParseNode(blob, 0)
-	if err != nil {
-		return common.Hash{}, err
-	}
-	return n.Commit().Bytes(), nil
+	return bintrie.DeserializeAndHash(blob, 0)
 }
 
 // Database is a multiple-layered structure for maintaining in-memory states
@@ -207,20 +137,28 @@ type Database struct {
 	// the shutdown to reject all following unexpected mutations.
 	readOnly bool       // Flag if database is opened in read only mode
 	waitSync bool       // Flag if database is deactivated due to initial state sync
-	isVerkle bool       // Flag if database is used for verkle tree
+	isUBT    bool       // Flag if database is used for verkle tree
 	hasher   nodeHasher // Trie node hasher
 
-	config  *Config                      // Configuration for database
-	diskdb  ethdb.Database               // Persistent storage for matured trie nodes
-	tree    *layerTree                   // The group for all known layers
-	freezer ethdb.ResettableAncientStore // Freezer for storing trie histories, nil possible in tests
-	lock    sync.RWMutex                 // Lock to prevent mutations from happening at the same time
+	config *Config        // Configuration for database
+	diskdb ethdb.Database // Persistent storage for matured trie nodes
+	tree   *layerTree     // The group for all known layers
+
+	stateFreezer ethdb.ResettableAncientStore // Freezer for storing state histories, nil possible in tests
+	stateIndexer *historyIndexer              // History indexer historical state data, nil possible
+
+	trienodeFreezer ethdb.ResettableAncientStore // Freezer for storing trienode histories, nil possible in tests
+	trienodeIndexer *historyIndexer              // History indexer for historical trienode data
+
+	lock sync.RWMutex // Lock to prevent mutations from happening at the same time
+
+	incr *incrManager // used to store incremental data: block, state and contract codes
 }
 
 // New attempts to load an already existing layer from a persistent key-value
 // store (with a number of memory layers from a journal). If the journal is not
 // matched with the base persistent layer, all the recorded diff layers are discarded.
-func New(diskdb ethdb.Database, config *Config, isVerkle bool) *Database {
+func New(diskdb ethdb.Database, config *Config, isUBT bool) *Database {
 	if config == nil {
 		config = Defaults
 	}
@@ -228,7 +166,7 @@ func New(diskdb ethdb.Database, config *Config, isVerkle bool) *Database {
 
 	db := &Database{
 		readOnly: config.ReadOnly,
-		isVerkle: isVerkle,
+		isUBT:    isUBT,
 		config:   config,
 		diskdb:   diskdb,
 		hasher:   merkleNodeHasher,
@@ -238,83 +176,231 @@ func New(diskdb ethdb.Database, config *Config, isVerkle bool) *Database {
 	// important to note that the introduction of a prefix won't lead to
 	// substantial storage overhead, as the underlying database will efficiently
 	// compress the shared key prefix.
-	if isVerkle {
+	if isUBT {
 		db.diskdb = rawdb.NewTable(diskdb, string(rawdb.VerklePrefix))
-		db.hasher = verkleNodeHasher
+		db.hasher = binaryNodeHasher
 	}
 	// Construct the layer tree by resolving the in-disk singleton state
 	// and in-memory layer journal.
 	db.tree = newLayerTree(db.loadLayers())
 
-	// Repair the state history, which might not be aligned with the state
-	// in the key-value store due to an unclean shutdown.
-	if err := db.repairHistory(); err != nil {
-		log.Crit("Failed to repair state history", "err", err)
+	// Repair the history, which might not be aligned with the persistent
+	// state in the key-value store due to an unclean shutdown.
+	states, trienodes, err := repairHistory(db.diskdb, isUBT, db.config.ReadOnly, db.tree.bottom().stateID(), db.config.TrienodeHistory >= 0)
+	if err != nil {
+		log.Crit("Failed to repair history", "err", err)
 	}
+	db.stateFreezer, db.trienodeFreezer = states, trienodes
+
+	if db.config.EnableIncr {
+		db.checkIncrConfig()
+		if err := db.repairIncrStore(); err != nil {
+			log.Crit("Failed to repair incremental history", "error", err)
+		}
+		// Start incremental store async workers
+		db.incr.Start()
+	}
+
 	// Disable database in case node is still in the initial state sync stage.
 	if rawdb.ReadSnapSyncStatusFlag(diskdb) == rawdb.StateSyncRunning && !db.readOnly {
 		if err := db.Disable(); err != nil {
 			log.Crit("Failed to disable database", "err", err) // impossible to happen
 		}
 	}
+	// Resolving the state snapshot generation progress from the database is
+	// mandatory. This ensures that uncovered flat states are not accessed,
+	// even if background generation is not allowed. If permitted, the generation
+	// might be scheduled.
+	if !config.MergeIncr {
+		if err := db.setStateGenerator(); err != nil {
+			log.Crit("Failed to setup the generator", "err", err)
+		}
+	}
+	db.setHistoryIndexer()
+
 	fields := config.fields()
-	if db.isVerkle {
+	if db.isUBT {
 		fields = append(fields, "verkle", true)
 	}
 	log.Info("Initialized path database", fields...)
 	return db
 }
 
-// repairHistory truncates leftover state history objects, which may occur due
-// to an unclean shutdown or other unexpected reasons.
-func (db *Database) repairHistory() error {
-	if db.config.NoTries {
-		return nil
+// SetStateGenerator sets state generator.
+func (db *Database) SetStateGenerator() {
+	if err := db.setStateGenerator(); err != nil {
+		log.Crit("Failed to setup the generator", "err", err)
 	}
-	// Open the freezer for state history. This mechanism ensures that
-	// only one database instance can be opened at a time to prevent
-	// accidental mutation.
-	ancient, err := db.diskdb.AncientDatadir()
-	if err != nil {
-		// TODO error out if ancient store is disabled. A tons of unit tests
-		// disable the ancient store thus the error here will immediately fail
-		// all of them. Fix the tests first.
-		return nil
-	}
-	freezer, err := rawdb.NewStateFreezer(ancient, db.isVerkle, db.readOnly)
-	if err != nil {
-		log.Crit("Failed to open state history freezer", "err", err)
-	}
-	db.freezer = freezer
+}
 
-	// Reset the entire state histories if the trie database is not initialized
-	// yet. This action is necessary because these state histories are not
-	// expected to exist without an initialized trie database.
-	id := db.tree.bottom().stateID()
-	if id == 0 {
-		frozen, err := db.freezer.Ancients()
-		if err != nil {
-			log.Crit("Failed to retrieve head of state history", "err", err)
+// setHistoryIndexer initializes the indexers for both state history and
+// trienode history if available. Note that this function may be called while
+// existing indexers are still running, so they must be closed beforehand.
+func (db *Database) setHistoryIndexer() {
+	// TODO (rjl493456442) disable the background indexing in read-only mode
+	if !db.config.EnableStateIndexing {
+		return
+	}
+	if db.stateFreezer != nil {
+		if db.stateIndexer != nil {
+			db.stateIndexer.close()
 		}
-		if frozen != 0 {
-			err := db.freezer.Reset()
-			if err != nil {
-				log.Crit("Failed to reset state histories", "err", err)
-			}
-			log.Info("Truncated extraneous state history")
+		db.stateIndexer = newHistoryIndexer(db.diskdb, db.stateFreezer, db.tree.bottom().stateID(), typeStateHistory, db.config.NoHistoryIndexDelay)
+		log.Info("Enabled state history indexing")
+	}
+	if db.trienodeFreezer != nil {
+		if db.trienodeIndexer != nil {
+			db.trienodeIndexer.close()
 		}
+		db.trienodeIndexer = newHistoryIndexer(db.diskdb, db.trienodeFreezer, db.tree.bottom().stateID(), typeTrienodeHistory, db.config.NoHistoryIndexDelay)
+		log.Info("Enabled trienode history indexing")
+	}
+}
+
+// setStateGenerator loads the state generation progress marker and potentially
+// resume the state generation if it's permitted.
+func (db *Database) setStateGenerator() error {
+	// Load the state snapshot generation progress marker to prevent access
+	// to uncovered states.
+	generator, root, err := loadGenerator(db.diskdb, db.hasher)
+	if err != nil {
+		return err
+	}
+	if generator == nil {
+		// Initialize an empty generator to rebuild the state snapshot from scratch
+		generator = &journalGenerator{
+			Marker: []byte{},
+		}
+	}
+	// Short circuit if the whole state snapshot has already been fully generated.
+	// The generator will be left as nil in disk layer for representing the whole
+	// state snapshot is available for accessing.
+	if generator.Done {
 		return nil
 	}
-	// Truncate the extra state histories above in freezer in case it's not
-	// aligned with the disk layer. It might happen after a unclean shutdown.
-	pruned, err := truncateFromHead(db.diskdb, db.freezer, id)
-	if err != nil {
-		log.Crit("Failed to truncate extra state histories", "err", err)
+	var origin uint64
+	if len(generator.Marker) >= 8 {
+		origin = binary.BigEndian.Uint64(generator.Marker)
 	}
-	if pruned != 0 {
-		log.Warn("Truncated extra state histories", "number", pruned)
+	stats := &generatorStats{
+		origin:   origin,
+		start:    time.Now(),
+		accounts: generator.Accounts,
+		slots:    generator.Slots,
+		storage:  common.StorageSize(generator.Storage),
+	}
+	dl := db.tree.bottom()
+
+	// Disable the background snapshot building in these circumstances:
+	// - the database is opened in read only mode
+	// - the snapshot build is explicitly disabled
+	// - the database is opened in verkle tree mode
+	noBuild := db.readOnly || db.config.SnapshotNoBuild || db.isUBT
+
+	// Construct the generator and link it to the disk layer, ensuring that the
+	// generation progress is resolved to prevent accessing uncovered states
+	// regardless of whether background state snapshot generation is allowed.
+	dl.setGenerator(newGenerator(db.diskdb, noBuild, generator.Marker, stats))
+
+	// Short circuit if the background generation is not permitted
+	if noBuild || db.waitSync {
+		return nil
+	}
+	stats.log("Starting snapshot generation", root, generator.Marker)
+	dl.generator.run(root)
+
+	// Block until the generation completes. It's the feature used in
+	// unit tests.
+	if db.config.NoAsyncGeneration {
+		<-dl.generator.done
 	}
 	return nil
+}
+
+func (db *Database) checkIncrConfig() {
+	ancientDir, err := db.diskdb.AncientDatadir()
+	if err != nil {
+		log.Crit("Failed to get ancient data dir", "err", err)
+	}
+
+	if db.config.IncrHistoryPath == "" {
+		db.config.IncrHistoryPath = filepath.Join(ancientDir, rawdb.IncrementalPath)
+	}
+	if db.config.IncrHistory == 0 {
+		db.config.IncrHistory = 100000
+	}
+	if db.config.IncrStateBuffer == 0 {
+		db.config.IncrStateBuffer = DefaultIncrStateBufferSize
+	}
+	if db.config.IncrKeptBlocks < DefaultKeptBlocks {
+		db.config.IncrKeptBlocks = DefaultKeptBlocks
+	} else {
+		if db.config.IncrKeptBlocks > db.config.IncrHistory {
+			db.config.IncrKeptBlocks = db.config.IncrHistory
+			log.Warn("IncrKeptBlocks shouldn't be greater than IncrHistory", "IncrHistory", db.config.IncrHistory,
+				"IncrKeptBlocks", db.config.IncrKeptBlocks)
+		}
+	}
+
+	log.Info("Incr snapshot config", "IncrHistoryPath", db.config.IncrHistoryPath, "IncrHistory", db.config.IncrHistory,
+		"IncrStateBuffer", common.StorageSize(db.config.IncrStateBuffer), "IncrKeptBlocks", db.config.IncrKeptBlocks)
+}
+
+// repairIncrStore init incremental manager and align incr chain and state freezer.
+func (db *Database) repairIncrStore() error {
+	if err := db.initIncrManager(); err != nil {
+		log.Error("Failed to initialize incr manager", "error", err)
+		return err
+	}
+
+	// Get disk layer state ID for validation
+	diskLayerID := db.tree.bottom().stateID()
+	if diskLayerID == 0 {
+		stateAncients, err := db.incr.incrDB.GetStateFreezer().Ancients()
+		if err != nil {
+			log.Error("Failed to retrieve head of incr state history", "error", err)
+			return err
+		}
+
+		if stateAncients != 0 {
+			block, err := db.GetStartBlock()
+			if err != nil {
+				log.Error("Failed to retrieve start block", "error", err)
+				return err
+			}
+			if err = db.incr.incrDB.ResetAllIncr(block); err != nil {
+				log.Error("Failed to reset incremental state histories", "error", err)
+				return err
+			}
+			log.Warn("Reset all incremental state histories")
+		}
+		return nil
+	}
+
+	// Align incremental data with disk layer
+	return db.alignIncrData(diskLayerID)
+}
+
+func (db *Database) GetStartBlock() (uint64, error) {
+	var block uint64
+	if dl := db.tree.bottomDiffLayer(); dl != nil {
+		// use the bottom diff layer block number
+		block = dl.block
+	} else if db.tree.bottom() != nil {
+		// force kill case, use the block next to the disk layer block
+		disk := db.tree.bottom()
+		var m meta
+		blob := rawdb.ReadStateHistoryMeta(db.stateFreezer, disk.id)
+		if err := m.decode(blob); err != nil {
+			log.Error("Failed to decode state histories", "err", err)
+			return 0, err
+		}
+		block = m.block + 1
+	} else {
+		// start from genesis
+		block = 1
+	}
+	return block, nil
 }
 
 // Update adds a new layer into the tree, if that can be linked to an existing
@@ -335,7 +421,13 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 	if err := db.modifyAllowed(); err != nil {
 		return err
 	}
-	if err := db.tree.add(root, parentRoot, block, nodes, states); err != nil {
+	var nodesWithOrigins *nodeSetWithOrigin
+	if db.config.TrienodeHistory >= 0 {
+		nodesWithOrigins = NewNodeSetWithOrigin(nodes.NodeAndOrigins())
+	} else {
+		nodesWithOrigins = NewNodeSetWithOrigin(nodes.Nodes(), nil)
+	}
+	if err := db.tree.add(root, parentRoot, block, nodesWithOrigins, states); err != nil {
 		return err
 	}
 	// Keep 128 diff layers in the memory, persistent layer is 129th.
@@ -379,8 +471,13 @@ func (db *Database) Disable() error {
 	}
 	db.waitSync = true
 
-	// Mark the disk layer as stale to prevent access to persistent state.
-	db.tree.bottom().markStale()
+	// Terminate the state generator if it's active and mark the disk layer
+	// as stale to prevent access to persistent state.
+	disk := db.tree.bottom()
+	if err := disk.terminate(); err != nil {
+		return err
+	}
+	disk.markStale()
 
 	// Write the initial sync flag to persist it across restarts.
 	rawdb.WriteSnapSyncStatusFlag(db.diskdb, rawdb.StateSyncRunning)
@@ -388,16 +485,9 @@ func (db *Database) Disable() error {
 	return nil
 }
 
-// Enable activates database and resets the state tree with the provided persistent
-// state root once the state sync is finished.
-func (db *Database) Enable(root common.Hash) error {
-	db.lock.Lock()
-	defer db.lock.Unlock()
-
-	// Short circuit if the database is in read only mode.
-	if db.readOnly {
-		return errDatabaseReadOnly
-	}
+// resetForReactivation performs the pathdb-side bookkeeping shared by both
+// Enable and AdoptSyncedState.
+func (db *Database) resetForReactivation(root common.Hash) error {
 	// Ensure the provided state root matches the stored one.
 	stored, err := db.hasher(rawdb.ReadAccountTrieNode(db.diskdb, nil))
 	if err != nil {
@@ -406,31 +496,86 @@ func (db *Database) Enable(root common.Hash) error {
 	if stored != root {
 		return fmt.Errorf("state root mismatch: stored %x, synced %x", stored, root)
 	}
-	// Drop the stale state journal in persistent database and
-	// reset the persistent state id back to zero.
+	// Drop the stale state journal marker and reset the persistent state id
+	// back to zero.
 	batch := db.diskdb.NewBatch()
-	db.DeleteTrieJournal(batch)
+	rawdb.DeleteSnapshotRoot(batch)
 	rawdb.WritePersistentStateID(batch, 0)
 	if err := batch.Write(); err != nil {
 		return err
 	}
-	// Clean up all state histories in freezer. Theoretically
-	// all root->id mappings should be removed as well. Since
-	// mappings can be huge and might take a while to clear
-	// them, just leave them in disk and wait for overwriting.
-	if db.freezer != nil {
-		if err := db.freezer.Reset(); err != nil {
-			return err
-		}
-	}
-	// Re-construct a new disk layer backed by persistent state
-	// with **empty clean cache and node buffer**.
-	db.tree.reset(newDiskLayer(root, 0, db, nil, NewTrieNodeBuffer(db.config.SyncFlush, db.config.WriteBufferSize, nil, nil, 0)))
+	// Clean up all state histories in the freezer. Theoretically all root->id
+	// mappings should be removed as well; since those can be huge, leave them
+	// on disk and let them be overwritten.
+	purgeHistory(db.stateFreezer, db.diskdb, typeStateHistory)
+	purgeHistory(db.trienodeFreezer, db.diskdb, typeTrienodeHistory)
 
-	// Re-enable the database as the final step.
+	// Re-enable the database as the final bookkeeping step.
 	db.waitSync = false
 	rawdb.WriteSnapSyncStatusFlag(db.diskdb, rawdb.StateSyncFinished)
+	return nil
+}
+
+// Enable activates the database after a snap/1 sync and schedules background
+// regeneration of the snapshot from the trie.
+func (db *Database) Enable(root common.Hash) error {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
+	if db.readOnly {
+		return errDatabaseReadOnly
+	}
+	if err := db.resetForReactivation(root); err != nil {
+		return err
+	}
+	// Re-construct a new disk layer backed by persistent state and schedule
+	// the state snapshot generation if it's permitted.
+	db.tree.init(generateSnapshot(db, root, db.isUBT || db.config.SnapshotNoBuild))
+
+	// After snap sync, the state of the database may have changed completely.
+	// To ensure the history indexer always matches the current state, we must:
+	//   1. Close any existing indexer
+	//   2. Re-initialize the indexer so it starts indexing from the new state root.
+	db.setHistoryIndexer()
+
 	log.Info("Rebuilt trie database", "root", root)
+	return nil
+}
+
+// AdoptSyncedState reactivates the database after a snap/2 sync. The syncer
+// already wrote a consistent flat state, so we take it as-is instead of
+// rebuilding it from the trie. The new disk layer has no generator attached,
+// and a "done" marker is written so future boots know the snapshot is
+// already complete.
+func (db *Database) AdoptSyncedState(root common.Hash) error {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
+	if db.readOnly {
+		return errDatabaseReadOnly
+	}
+	if err := db.resetForReactivation(root); err != nil {
+		return err
+	}
+
+	// Tell the snapshot subsystem the flat state is good by writing the new root
+	// and a "done" marker (nil journal) so the next boot doesn't try to rebuild it.
+	batch := db.diskdb.NewBatch()
+	rawdb.WriteSnapshotRoot(batch, root)
+	journalProgress(batch, nil, nil)
+	if err := batch.Write(); err != nil {
+		return err
+	}
+
+	// New disk layer, no generator attached. Nothing to rebuild, and reads
+	// can serve the flat state right away without waiting on a generator to
+	// scan past every key.
+	dl := newDiskLayer(root, 0, db, nil, nil, newBuffer(db.config.WriteBufferSize, nil, nil, 0), nil)
+	db.tree.init(dl)
+
+	db.setHistoryIndexer()
+
+	log.Info("Adopted synced state", "root", root)
 	return nil
 }
 
@@ -447,7 +592,7 @@ func (db *Database) Recover(root common.Hash) error {
 	if err := db.modifyAllowed(); err != nil {
 		return err
 	}
-	if db.freezer == nil {
+	if db.stateFreezer == nil {
 		return errors.New("state rollback is non-supported")
 	}
 	// Short circuit if the target state is not recoverable
@@ -460,7 +605,7 @@ func (db *Database) Recover(root common.Hash) error {
 		dl    = db.tree.bottom()
 	)
 	for dl.rootHash() != root {
-		h, err := readHistory(db.freezer, dl.stateID())
+		h, err := readStateHistory(db.stateFreezer, dl.stateID())
 		if err != nil {
 			return err
 		}
@@ -471,10 +616,8 @@ func (db *Database) Recover(root common.Hash) error {
 		// reset layer with newly created disk layer. It must be
 		// done after each revert operation, otherwise the new
 		// disk layer won't be accessible from outside.
-		db.tree.reset(dl)
+		db.tree.init(dl)
 	}
-	db.DeleteTrieJournal(db.diskdb)
-
 	// Explicitly sync the key-value store to ensure all recent writes are
 	// flushed to disk. This step is crucial to prevent a scenario where
 	// recent key-value writes are lost due to an application panic, while
@@ -483,9 +626,15 @@ func (db *Database) Recover(root common.Hash) error {
 	if err := db.diskdb.SyncKeyValue(); err != nil {
 		return err
 	}
-	_, err := truncateFromHead(db.diskdb, db.freezer, dl.stateID())
+	_, err := truncateFromHead(db.stateFreezer, typeStateHistory, dl.stateID())
 	if err != nil {
 		return err
+	}
+	if db.trienodeFreezer != nil {
+		_, err = truncateFromHead(db.trienodeFreezer, typeTrienodeHistory, dl.stateID())
+		if err != nil {
+			return err
+		}
 	}
 	log.Debug("Recovered state", "root", root, "elapsed", common.PrettyDuration(time.Since(start)))
 	return nil
@@ -508,15 +657,15 @@ func (db *Database) Recoverable(root common.Hash) bool {
 		return false
 	}
 	// This is a temporary workaround for the unavailability of the freezer in
-	// dev mode. As a consequence, the Pathdb loses the ability for deep reorg
+	// dev mode. As a consequence, the database loses the ability for deep reorg
 	// in certain cases.
 	// TODO(rjl493456442): Implement the in-memory ancient store.
-	if db.freezer == nil {
+	if db.stateFreezer == nil {
 		return false
 	}
 	// Ensure the requested state is a canonical state and all state
-	// histories in range [id+1, disklayer.ID] are present and complete.
-	return checkHistories(db.freezer, *id+1, dl.stateID()-*id, func(m *meta) error {
+	// histories in range [id+1, dl.ID] are present and complete.
+	return checkStateHistories(db.stateFreezer, *id+1, dl.stateID()-*id, func(m *meta) error {
 		if m.parent != root {
 			return errors.New("unexpected state history")
 		}
@@ -534,33 +683,65 @@ func (db *Database) Close() error {
 	// following mutations.
 	db.readOnly = true
 
-	// Release the memory held by clean cache.
-	db.tree.bottom().resetCache()
+	// Block until the background flushing is finished. It must
+	// be done before terminating the potential background snapshot
+	// generator.
+	dl := db.tree.bottom()
+	if err := dl.terminate(); err != nil {
+		return err
+	}
+	dl.resetCache() // release the memory held by clean cache
+
+	// Terminate the background state history indexer
+	if db.stateIndexer != nil {
+		db.stateIndexer.close()
+	}
+	if db.trienodeIndexer != nil {
+		db.trienodeIndexer.close()
+	}
+
+	if db.config.EnableIncr {
+		log.Info("Closing incremental store")
+
+		// Wait for all async write tasks to complete before closing
+		if db.incr != nil {
+			log.Info("Waiting for async write tasks to complete", "pending", db.incr.GetQueueLength())
+			db.incr.LogStats()
+			db.incr.Stop()
+		}
+
+		if err := db.incr.incrDB.Close(); err != nil {
+			log.Error("Failed to close incremental db", "err", err)
+			return err
+		}
+	}
 
 	// Close the attached state history freezer.
-	if db.freezer == nil {
-		return nil
+	if db.stateFreezer != nil {
+		if err := db.stateFreezer.Close(); err != nil {
+			return err
+		}
 	}
-	return db.freezer.Close()
+	if db.trienodeFreezer != nil {
+		if err := db.trienodeFreezer.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Size returns the current storage size of the memory cache in front of the
 // persistent database layer.
-func (db *Database) Size() (diffs common.StorageSize, nodes common.StorageSize, immutableNodes common.StorageSize) {
+func (db *Database) Size() (diffs common.StorageSize, nodes common.StorageSize) {
 	db.tree.forEach(func(layer layer) {
 		if diff, ok := layer.(*diffLayer); ok {
 			diffs += common.StorageSize(diff.size())
 		}
 		if disk, ok := layer.(*diskLayer); ok {
-			nodes, immutableNodes = disk.size()
+			nodes += disk.size()
 		}
 	})
-	return diffs, nodes, immutableNodes
-}
-
-// Scheme returns the node scheme used in the database.
-func (db *Database) Scheme() string {
-	return rawdb.PathScheme
+	return diffs, nodes
 }
 
 // Head return the top non-fork difflayer/disklayer root hash for rewinding.
@@ -603,42 +784,18 @@ func (db *Database) GetAllRooHash() [][]string {
 	return data
 }
 
-// DetermineJournalTypeForWriter is used when persisting the journal. It determines JournalType based on the config passed in by the Config.
-func (db *Database) DetermineJournalTypeForWriter() JournalType {
-	if db.config.JournalFile {
-		return JournalFileType
+// journalPath returns the absolute path of journal for persisting state data.
+func (db *Database) journalPath() string {
+	if db.config.JournalDirectory == "" {
+		return ""
+	}
+	var fname string
+	if db.isUBT {
+		fname = fmt.Sprintf("verkle.journal")
 	} else {
-		return JournalKVType
+		fname = fmt.Sprintf("merkle.journal")
 	}
-}
-
-// DetermineJournalTypeForReader is used when loading the journal. It loads based on whether JournalKV or JournalFile currently exists.
-func (db *Database) DetermineJournalTypeForReader() JournalType {
-	if journal := rawdb.ReadTrieJournal(db.diskdb); len(journal) != 0 {
-		return JournalKVType
-	}
-
-	if fileInfo, stateErr := os.Stat(db.config.JournalFilePath); stateErr == nil && !fileInfo.IsDir() {
-		return JournalFileType
-	}
-
-	return JournalKVType
-}
-
-func (db *Database) DeleteTrieJournal(writer ethdb.KeyValueWriter) error {
-	// To prevent any remnants of old journals after converting from JournalKV to JournalFile or vice versa, all deletions must be completed.
-	rawdb.DeleteTrieJournal(writer)
-
-	// delete from journal file, may not exist
-	filePath := db.config.JournalFilePath
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		return nil
-	}
-	errRemove := os.Remove(filePath)
-	if errRemove != nil {
-		log.Crit("Failed to remove tries journal", "journal path", filePath, "err", errRemove)
-	}
-	return nil
+	return filepath.Join(db.config.JournalDirectory, fname)
 }
 
 // AccountHistory inspects the account history within the specified range.
@@ -649,7 +806,7 @@ func (db *Database) DeleteTrieJournal(writer ethdb.KeyValueWriter) error {
 // End: State ID of the last history for the query. 0 implies the last available
 // object is selected as the ending point. Note end is included in the query.
 func (db *Database) AccountHistory(address common.Address, start, end uint64) (*HistoryStats, error) {
-	return accountHistory(db.freezer, address, start, end)
+	return accountHistory(db.stateFreezer, address, start, end)
 }
 
 // StorageHistory inspects the storage history within the specified range.
@@ -662,23 +819,436 @@ func (db *Database) AccountHistory(address common.Address, start, end uint64) (*
 //
 // Note, slot refers to the hash of the raw slot key.
 func (db *Database) StorageHistory(address common.Address, slot common.Hash, start uint64, end uint64) (*HistoryStats, error) {
-	return storageHistory(db.freezer, address, slot, start, end)
+	return storageHistory(db.stateFreezer, address, slot, start, end)
 }
 
 // HistoryRange returns the block numbers associated with earliest and latest
 // state history in the local store.
 func (db *Database) HistoryRange() (uint64, uint64, error) {
-	return historyRange(db.freezer)
+	return historyRange(db.stateFreezer)
+}
+
+// IndexProgress returns the indexing progress made so far. It provides the
+// number of states that remain unindexed.
+func (db *Database) IndexProgress() (uint64, uint64, error) {
+	var (
+		stateProgress uint64
+		trieProgress  uint64
+	)
+	if db.stateIndexer != nil {
+		prog, err := db.stateIndexer.progress()
+		if err != nil {
+			return 0, 0, err
+		}
+		stateProgress = prog
+	}
+	if db.trienodeIndexer != nil {
+		prog, err := db.trienodeIndexer.progress()
+		if err != nil {
+			return 0, 0, err
+		}
+		trieProgress = prog
+	}
+	return stateProgress, trieProgress, nil
 }
 
 // AccountIterator creates a new account iterator for the specified root hash and
 // seeks to a starting account hash.
 func (db *Database) AccountIterator(root common.Hash, seek common.Hash) (AccountIterator, error) {
+	db.lock.RLock()
+	wait := db.waitSync
+	db.lock.RUnlock()
+	if wait {
+		return nil, errDatabaseWaitSync
+	}
+	if !db.tree.bottom().genComplete() {
+		return nil, errNotConstructed
+	}
 	return newFastAccountIterator(db, root, seek)
 }
 
 // StorageIterator creates a new storage iterator for the specified root hash and
 // account. The iterator will be moved to the specific start position.
 func (db *Database) StorageIterator(root common.Hash, account common.Hash, seek common.Hash) (StorageIterator, error) {
+	db.lock.RLock()
+	wait := db.waitSync
+	db.lock.RUnlock()
+	if wait {
+		return nil, errDatabaseWaitSync
+	}
+	if !db.tree.bottom().genComplete() {
+		return nil, errNotConstructed
+	}
 	return newFastStorageIterator(db, root, account, seek)
+}
+
+// SnapshotCompleted returns the flag indicating if the snapshot generation is completed.
+func (db *Database) SnapshotCompleted() bool {
+	db.lock.RLock()
+	wait := db.waitSync
+	db.lock.RUnlock()
+	if wait {
+		return false
+	}
+	return db.tree.bottom().genComplete()
+}
+
+// IsIncrEnabled returns true if incremental is enabled, otherwise false.
+func (db *Database) IsIncrEnabled() bool {
+	return db.config.EnableIncr
+}
+
+// MergeIncrState merges incremental state data into local data.
+func (db *Database) MergeIncrState(incrDir string) error {
+	incrStateFreezer, err := rawdb.OpenIncrStateFreezer(incrDir, true)
+	if err != nil {
+		log.Error("Failed to open incremental state freezer", "error", err)
+		return err
+	}
+	defer incrStateFreezer.Close()
+
+	incrAncients, _ := incrStateFreezer.Ancients()
+	tail, _ := incrStateFreezer.Tail()
+	log.Info("Merged incr state freezer info", "ancients", incrAncients, "tail", tail)
+
+	incrStateMeta := rawdb.ReadIncrStateHistoryMeta(incrStateFreezer, incrAncients)
+	if incrStateMeta == nil {
+		log.Error("Failed to read incremental chain freezer", "error", err)
+		return err
+	}
+	if err = rawdb.ResetStateTableToNewStartPoint(db.stateFreezer, incrStateMeta.StateIDArray[1]); err != nil {
+		log.Error("Failed to reset state freezer with new start point", "error", err,
+			"lastStateID", incrStateMeta.StateIDArray[1])
+		return err
+	}
+
+	dl := db.tree.bottom()
+	err = dl.mergeIncrNodesWithStates(db.diskdb, db.stateFreezer, incrStateFreezer, tail+1, incrAncients)
+	if err != nil {
+		log.Error("Failed to merge incremental trie nodes", "error", err)
+		return err
+	}
+
+	root, err := db.hasher(rawdb.ReadAccountTrieNode(db.diskdb, nil))
+	if err != nil {
+		log.Crit("Failed to compute node hash", "err", err)
+	}
+	dl = newDiskLayer(root, rawdb.ReadPersistentStateID(db.diskdb), db, nil, nil, newBuffer(db.config.WriteBufferSize, nil, nil, 0), nil)
+	db.tree = newLayerTree(dl)
+	log.Info("Completed merging incr state")
+	return nil
+}
+
+// WriteContractCodes wrote codes into incremental chain freezer
+func (db *Database) WriteContractCodes(codes map[common.Address]rawdb.ContractCode) error {
+	return db.incr.incrDB.WriteIncrContractCodes(codes)
+}
+
+// incrInfo holds information about incremental data state
+type incrInfo struct {
+	stateFreezer     ethdb.ResettableAncientStore
+	chainFreezer     ethdb.ResettableAncientStore
+	stateAncients    uint64
+	chainAncients    uint64
+	lastChainStateID uint64
+	lastStateID      uint64
+	lastStateBlock   uint64
+}
+
+func (info *incrInfo) isEmpty() bool {
+	return info.stateAncients == 0 || info.chainAncients == 0
+}
+
+// initIncrManager initializes the incremental manager
+func (db *Database) initIncrManager() error {
+	block, err := db.GetStartBlock()
+	if err != nil {
+		return err
+	}
+
+	incrDB, err := rawdb.NewIncrSnapDB(db.config.IncrHistoryPath, db.readOnly, block, db.config.IncrHistory)
+	if err != nil {
+		log.Error("Failed to open incremental db", "error", err)
+		return err
+	}
+
+	db.incr = NewIncrManager(db, incrDB)
+	return nil
+}
+
+// loadIncrInfo loads current incremental data information
+func (db *Database) loadIncrInfo() (*incrInfo, error) {
+	info := &incrInfo{}
+
+	info.stateFreezer = db.incr.incrDB.GetStateFreezer()
+	info.chainFreezer = db.incr.incrDB.GetChainFreezer()
+
+	var err error
+	info.stateAncients, err = info.stateFreezer.Ancients()
+	if err != nil {
+		log.Error("Failed to retrieve head of incr state history", "error", err)
+		return nil, err
+	}
+	info.chainAncients, err = info.chainFreezer.Ancients()
+	if err != nil {
+		log.Error("Failed to retrieve head of incr chain history", "error", err)
+		return nil, err
+	}
+
+	// Load last state info if data exists
+	if !info.isEmpty() {
+		// Read last chain state ID
+		info.lastChainStateID, err = rawdb.ReadIncrChainMapping(info.chainFreezer, info.chainAncients-1)
+		if err != nil {
+			log.Error("Failed to read incr chain mapping", "error", err)
+			return nil, err
+		}
+
+		// Read last state metadata
+		metadata := rawdb.ReadIncrStateHistoryMeta(info.stateFreezer, info.stateAncients)
+		if metadata == nil {
+			return nil, fmt.Errorf("last incr state history not found: %d", info.stateAncients)
+		}
+
+		info.lastStateID = metadata.StateIDArray[1]
+		info.lastStateBlock = metadata.BlockNumberArray[1]
+		log.Info("Incr data info", "lastChainStateID", info.lastChainStateID,
+			"lastStateID", info.lastStateID, "lastChainBlock", info.chainAncients-1,
+			"lastStateBlock", info.lastStateBlock)
+	}
+
+	return info, nil
+}
+
+func (db *Database) alignIncrData(diskLayerID uint64) error {
+	// Load current incremental data info
+	info, err := db.loadIncrInfo()
+	if err != nil {
+		return err
+	}
+
+	var recordFirstStateID uint64
+	data, err := db.incr.incrDB.GetKVDB().Get(rawdb.FirstStateID)
+	if err != nil {
+		if errors.Is(err, pebble.ErrNotFound) {
+			db.incr.incrDB.WriteFirstStateID(diskLayerID)
+			recordFirstStateID = diskLayerID
+		} else {
+			return err
+		}
+	} else {
+		recordFirstStateID = binary.BigEndian.Uint64(data)
+	}
+
+	// Get start block to avoid duplicate data writing
+	startBlock, err := db.GetStartBlock()
+	if err != nil {
+		log.Error("Failed to get start block", "error", err)
+		return err
+	}
+
+	log.Info("Incremental data alignment check", "stateAncients", info.stateAncients,
+		"chainAncients", info.chainAncients, "diskLayerID", diskLayerID, "startBlock", startBlock, "recordFirstStateID", recordFirstStateID)
+
+	if info.isEmpty() {
+		log.Info("Force kill with empty data")
+		if info.chainAncients == 0 && info.stateAncients == 0 {
+			if err = db.setBlockCount(startBlock, 0); err != nil {
+				return err
+			}
+			return nil
+		}
+		if diskLayerID > recordFirstStateID {
+			h, err := readStateHistory(db.stateFreezer, recordFirstStateID)
+			if err != nil {
+				return err
+			}
+
+			if err = db.Recover(h.meta.root); err != nil {
+				log.Error("Failed to recover state after force kill", "root", h.meta.root, "stateID", info.lastStateID, "error", err)
+			} else {
+				log.Info("Successfully recovered state after force kill", "root", h.meta.root, "stateID", recordFirstStateID)
+			}
+
+			db.incr.duplicateEndBlock = h.meta.block
+		} else {
+			// use current dir block
+			start, _, err := db.incr.incrDB.ParseCurrDirBlockNumber()
+			if err != nil {
+				return err
+			}
+			db.incr.duplicateEndBlock = start - 1
+			log.Info("recordFirstStateID is bigger", "start", start)
+		}
+
+		if err = info.stateFreezer.Reset(); err != nil {
+			return err
+		}
+		if err = info.chainFreezer.Reset(); err != nil {
+			return err
+		}
+		if err = db.incr.resetIncrChainFreezer(db.diskdb, db.incr.duplicateEndBlock+1); err != nil {
+			return err
+		}
+		if err = db.setBlockCount(startBlock, 0); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	log.Info("Both incr chain and state have data, comparing for alignment",
+		"lastChainStateID", info.lastChainStateID, "lastStateID", info.lastStateID,
+		"lastStateBlock", info.lastStateBlock, "chainAncients", info.chainAncients)
+
+	// handle force kill with incr state and chain data
+	if info.chainAncients-1 != info.lastStateBlock {
+		log.Info("Force kill with data")
+		if diskLayerID > info.lastStateID {
+			h, err := readStateHistory(db.stateFreezer, info.lastStateID)
+			if err != nil {
+				return err
+			}
+			if h.meta.block != info.lastStateBlock {
+				return fmt.Errorf("history block [%d] is unequal to incr recorded block [%d]", h.meta.block, info.lastStateBlock)
+			}
+
+			if err = db.Recover(h.meta.root); err != nil {
+				log.Error("Failed to recover state after force kill", "root", h.meta.root, "stateID", info.lastStateID, "error", err)
+			} else {
+				log.Info("Successfully recovered state after force kill", "root", h.meta.root, "stateID", info.lastStateID)
+			}
+
+			db.incr.duplicateEndBlock = h.meta.block
+		} else {
+			db.incr.duplicateEndBlock = info.lastStateBlock
+		}
+
+		if err = info.chainFreezer.Reset(); err != nil {
+			return err
+		}
+		if err = db.incr.resetIncrChainFreezer(db.diskdb, info.lastStateBlock); err != nil {
+			return err
+		}
+		if err = db.setBlockCount(startBlock, info.lastStateBlock); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Find the minimum state ID to ensure consistency
+	var finalStateID, finalBlock uint64
+	if info.lastChainStateID < info.lastStateID {
+		finalStateID = info.lastChainStateID
+		finalBlock = info.chainAncients - 1
+	} else if info.lastStateID < info.lastChainStateID {
+		finalStateID = info.lastStateID
+		finalBlock = info.lastStateBlock
+	} else {
+		finalStateID = info.lastStateID
+		finalBlock = info.lastStateBlock
+	}
+
+	if finalStateID < diskLayerID {
+		return fmt.Errorf("Final state ID is less than disk layer ID, diskLayerID: %d, finalStateID: %d", diskLayerID, finalStateID)
+	}
+
+	// Truncate incr state freezer
+	if err = db.truncateIncrStateFreezer(info, finalStateID); err != nil {
+		return err
+	}
+	// Truncate incr chain freezer
+	if err = db.truncateIncrChainFreezer(info, finalBlock); err != nil {
+		return err
+	}
+
+	if err = db.setBlockCount(startBlock, finalBlock); err != nil {
+		return err
+	}
+	return nil
+}
+
+// truncateIncrStateFreezer truncates the incr state freezer to align with final state
+func (db *Database) truncateIncrStateFreezer(info *incrInfo, finalStateID uint64) error {
+	truncatePos := info.stateAncients
+
+	// Find the correct truncate position if needed
+	if info.lastChainStateID < info.lastStateID {
+		for index := info.stateAncients; index >= 1; index-- {
+			metadata := rawdb.ReadIncrStateHistoryMeta(info.stateFreezer, index)
+			if metadata == nil {
+				return fmt.Errorf("incr state history not found: %d", index)
+			}
+
+			if finalStateID >= metadata.StateIDArray[0] && finalStateID <= metadata.StateIDArray[1] {
+				truncatePos = index
+				break
+			}
+		}
+	}
+
+	pruned, err := truncateFromHead(info.stateFreezer, typeStateHistory, truncatePos)
+	if err != nil {
+		log.Error("Failed to truncate incr state histories", "error", err)
+		return err
+	}
+	if pruned != 0 {
+		log.Warn("Truncated incr state histories to align with chain",
+			"number", pruned, "finalStateID", finalStateID)
+	}
+	return nil
+}
+
+// truncateIncrChainFreezer truncates the incr chain freezer to align with final block
+func (db *Database) truncateIncrChainFreezer(info *incrInfo, finalBlock uint64) error {
+	chainTail, err := info.chainFreezer.Tail()
+	if err != nil {
+		log.Error("Failed to retrieve tail of incr chain history", "error", err)
+		return err
+	}
+
+	if finalBlock < chainTail {
+		if err = info.chainFreezer.Reset(); err != nil {
+			log.Error("Failed to reset incr chain history", "error", err)
+			return err
+		}
+		log.Info("Reset incr chain history due to truncation is out of range",
+			"finalBlock", finalBlock, "tail", chainTail)
+		return nil
+	}
+
+	pruned, err := truncateIncrChainFreezerFromHead(info.chainFreezer, finalBlock)
+	if err != nil {
+		log.Error("Failed to truncate incr chain histories", "error", err)
+		return err
+	}
+	if pruned != 0 {
+		log.Warn("Truncated incr chain histories to align with state",
+			"number", pruned, "finalBlock", finalBlock)
+	}
+	return nil
+}
+
+func (db *Database) setBlockCount(startBlock, currBlock uint64) error {
+	dirStartBlock, dirEndBlock, err := db.incr.incrDB.ParseCurrDirBlockNumber()
+	if err != nil {
+		return err
+	}
+
+	if startBlock > dirEndBlock+1 {
+		return fmt.Errorf("start block [%d] is beyond dir end block [%d], please reset incr dir", startBlock, dirEndBlock)
+	}
+
+	var blockCount uint64
+	if currBlock < dirStartBlock {
+		blockCount = 0
+	} else if currBlock >= dirStartBlock && currBlock <= dirEndBlock {
+		blockCount = currBlock - dirStartBlock
+	} else {
+		blockCount = db.config.IncrHistory
+	}
+
+	log.Info("SetBlockCount", "blockCount", blockCount, "dirStartBlock", dirStartBlock, "dirEndBlock", dirEndBlock,
+		"currBlock", currBlock)
+	db.incr.incrDB.SetBlockCount(blockCount)
+	return nil
 }

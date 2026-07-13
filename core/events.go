@@ -17,6 +17,9 @@
 package core
 
 import (
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -42,7 +45,9 @@ type NewVoteEvent struct{ Vote *types.VoteEnvelope }
 type FinalizedHeaderEvent struct{ Header *types.Header }
 
 type ChainEvent struct {
-	Header *types.Header
+	Header       *types.Header
+	Receipts     []*types.Receipt
+	Transactions []*types.Transaction
 }
 
 type ChainHeadEvent struct {
@@ -50,3 +55,10 @@ type ChainHeadEvent struct {
 }
 
 type HighestVerifiedBlockEvent struct{ Header *types.Header }
+
+// NewPayloadEvent is posted when engine_newPayloadVX processes a block.
+type NewPayloadEvent struct {
+	Hash           common.Hash
+	Number         uint64
+	ProcessingTime time.Duration
+}

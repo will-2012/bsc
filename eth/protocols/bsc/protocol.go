@@ -39,11 +39,9 @@ const (
 var defaultExtra = []byte{0x00}
 
 var (
-	errNoBscCapMsg             = errors.New("no bsc capability message")
-	errMsgTooLarge             = errors.New("message too long")
-	errDecode                  = errors.New("invalid message")
-	errInvalidMsgCode          = errors.New("invalid message code")
-	errProtocolVersionMismatch = errors.New("protocol version mismatch")
+	errMsgTooLarge    = errors.New("message too long")
+	errDecode         = errors.New("invalid message")
+	errInvalidMsgCode = errors.New("invalid message code")
 )
 
 // Packet represents a p2p message in the `bsc` protocol.
@@ -106,3 +104,11 @@ type BlocksByRangePacket struct {
 
 func (*BlocksByRangePacket) Name() string { return "BlocksByRange" }
 func (*BlocksByRangePacket) Kind() byte   { return BlocksByRangeMsg }
+
+// BlocksByRangeRLPPacket mirrors BlocksByRangePacket on the wire but carries
+// pre-encoded entries, letting the server reuse RLP bytes already produced for
+// size accounting and avoid a redundant encode pass in p2p.Send.
+type BlocksByRangeRLPPacket struct {
+	RequestId uint64
+	Blocks    []rlp.RawValue
+}

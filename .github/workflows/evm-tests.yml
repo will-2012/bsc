@@ -7,7 +7,7 @@ on:
       - develop
 
   pull_request:
-    branches: 
+    branches:
       - master
       - develop
 
@@ -15,19 +15,23 @@ jobs:
   evm-test:
     strategy:
       matrix:
-        go-version: [1.24.x]
+        go-version: [1.25.x]
         os: [ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
     - name: Install Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
         
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
+      with:
+        # Non-recursive: fetches testdata/evm-benchmarks but not the nested
+        # LegacyTests, so TestLegacyState self-skips (matching upstream).
+        submodules: true
 
-    - uses: actions/cache@v3
+    - uses: actions/cache@v4
       with:
         # In order:
         # * Module download cache
@@ -50,5 +54,8 @@ jobs:
         ANDROID_HOME: "" # Skip android test
       run: |
         go mod download
-        cd tests && bash -x run-evm-tests.sh
+        # ci.go downloads the pinned fixtures (build/checksums.txt) and runs the
+        # suite — no shell wrapper or source patch. Non-short so fixtures download;
+        # -timeout 1h because full statetests exceed ci.go's 10m default.
+        go run build/ci.go test -timeout 1h ./tests/
         

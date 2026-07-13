@@ -32,28 +32,31 @@ import (
 
 // Config defines all necessary options for database.
 type Config struct {
-	Preimages bool // Flag whether the preimage of node key is recorded
-	Cache     int
-	NoTries   bool
-	IsVerkle  bool           // Flag whether the db is holding a verkle tree
-	HashDB    *hashdb.Config // Configs for hash-based scheme
-	PathDB    *pathdb.Config // Configs for experimental path-based scheme
+	NoTries           bool
+	Preimages         bool           // Flag whether the preimage of node key is recorded
+	IsUBT             bool           // Flag whether the db is holding a unified binary tree
+	BinTrieGroupDepth int            // Number of levels per serialized group in binary trie (1-8, default 8)
+	HashDB            *hashdb.Config // Configs for hash-based scheme
+	PathDB            *pathdb.Config // Configs for experimental path-based scheme
 }
+
+const DefaultBinTrieGroupDepth = 5
 
 // HashDefaults represents a config for using hash-based scheme with
 // default settings.
 var HashDefaults = &Config{
 	Preimages: false,
-	IsVerkle:  false,
+	IsUBT:     false,
 	HashDB:    hashdb.Defaults,
 }
 
-// VerkleDefaults represents a config for holding verkle trie data
+// UBTDefaults represents a config for holding unified binary trie data
 // using path-based scheme with default settings.
-var VerkleDefaults = &Config{
-	Preimages: false,
-	IsVerkle:  true,
-	PathDB:    pathdb.Defaults,
+var UBTDefaults = &Config{
+	Preimages:         false,
+	IsUBT:             true,
+	BinTrieGroupDepth: DefaultBinTrieGroupDepth,
+	PathDB:            pathdb.Defaults,
 }
 
 // backend defines the methods needed to access/update trie nodes in different
@@ -72,7 +75,7 @@ type backend interface {
 	//
 	// For hash scheme, there is no differentiation between diff layer nodes
 	// and dirty disk layer nodes, so both are merged into the second return.
-	Size() (common.StorageSize, common.StorageSize, common.StorageSize)
+	Size() (common.StorageSize, common.StorageSize)
 
 	// Commit writes all relevant trie nodes belonging to the specified state
 	// to disk. Report specifies whether logs will be displayed in info level.
@@ -96,12 +99,6 @@ type Database struct {
 // the legacy hash-based scheme is used by default.
 func NewDatabase(diskdb ethdb.Database, config *Config) *Database {
 	// Sanitize the config and use the default one if it's not specified.
-	var triediskdb ethdb.Database
-	if diskdb != nil && diskdb.StateStore() != nil {
-		triediskdb = diskdb.StateStore()
-	} else {
-		triediskdb = diskdb
-	}
 	dbScheme := rawdb.ReadStateScheme(diskdb)
 	if config == nil {
 		if dbScheme == rawdb.PathScheme {
@@ -119,17 +116,17 @@ func NewDatabase(diskdb ethdb.Database, config *Config) *Database {
 			config.HashDB = hashdb.Defaults
 		}
 	}
-	if config.PathDB != nil && config.NoTries {
-		config.PathDB.NoTries = true
-	}
 	var preimages *preimageStore
 	if config.Preimages {
-		preimages = newPreimageStore(triediskdb)
+		preimages = newPreimageStore(diskdb)
 	}
 	db := &Database{
 		disk:      diskdb,
 		config:    config,
 		preimages: preimages,
+	}
+	if config.HashDB != nil && config.PathDB != nil {
+		log.Crit("Both 'hash' and 'path' mode are configured")
 	}
 	/*
 	 * 1. First, initialize db according to the user config
@@ -137,25 +134,25 @@ func NewDatabase(diskdb ethdb.Database, config *Config) *Database {
 	 * 3. Last, use the default scheme, namely hash scheme
 	 */
 	if config.HashDB != nil {
-		if rawdb.ReadStateScheme(triediskdb) == rawdb.PathScheme {
+		if rawdb.ReadStateScheme(diskdb) == rawdb.PathScheme {
 			log.Warn("Incompatible state scheme", "old", rawdb.PathScheme, "new", rawdb.HashScheme)
 		}
-		db.backend = hashdb.New(triediskdb, config.HashDB)
+		db.backend = hashdb.New(diskdb, config.HashDB)
 	} else if config.PathDB != nil {
-		if rawdb.ReadStateScheme(triediskdb) == rawdb.HashScheme {
+		if rawdb.ReadStateScheme(diskdb) == rawdb.HashScheme {
 			log.Warn("Incompatible state scheme", "old", rawdb.HashScheme, "new", rawdb.PathScheme)
 		}
-		db.backend = pathdb.New(triediskdb, config.PathDB, config.IsVerkle)
+		db.backend = pathdb.New(diskdb, config.PathDB, config.IsUBT)
 	} else if strings.Compare(dbScheme, rawdb.PathScheme) == 0 {
 		if config.PathDB == nil {
 			config.PathDB = pathdb.Defaults
 		}
-		db.backend = pathdb.New(triediskdb, config.PathDB, config.IsVerkle)
+		db.backend = pathdb.New(diskdb, config.PathDB, config.IsUBT)
 	} else {
 		if config.HashDB == nil {
 			config.HashDB = hashdb.Defaults
 		}
-		db.backend = hashdb.New(triediskdb, config.HashDB)
+		db.backend = hashdb.New(diskdb, config.HashDB)
 	}
 	return db
 }
@@ -175,6 +172,24 @@ func (db *Database) NodeReader(blockRoot common.Hash) (database.NodeReader, erro
 // not available.
 func (db *Database) StateReader(blockRoot common.Hash) (database.StateReader, error) {
 	return db.backend.StateReader(blockRoot)
+}
+
+// HistoricStateReader constructs a reader for accessing the requested historic state.
+func (db *Database) HistoricStateReader(root common.Hash) (*pathdb.HistoricalStateReader, error) {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return nil, errors.New("not supported")
+	}
+	return pdb.HistoricReader(root)
+}
+
+// HistoricNodeReader constructs a reader for accessing the historical trie node.
+func (db *Database) HistoricNodeReader(root common.Hash) (*pathdb.HistoricalNodeReader, error) {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return nil, errors.New("not supported")
+	}
+	return pdb.HistoricNodeReader(root)
 }
 
 // Update performs a state transition by committing dirty nodes contained in the
@@ -210,16 +225,16 @@ func (db *Database) Commit(root common.Hash, report bool) error {
 // Size returns the storage size of diff layer nodes above the persistent disk
 // layer, the dirty nodes buffered within the disk layer, and the size of cached
 // preimages.
-func (db *Database) Size() (common.StorageSize, common.StorageSize, common.StorageSize, common.StorageSize) {
+func (db *Database) Size() (common.StorageSize, common.StorageSize, common.StorageSize) {
 	var (
-		diffs, nodes, immutablenodes common.StorageSize
-		preimages                    common.StorageSize
+		diffs, nodes common.StorageSize
+		preimages    common.StorageSize
 	)
-	diffs, nodes, immutablenodes = db.backend.Size()
+	diffs, nodes = db.backend.Size()
 	if db.preimages != nil {
 		preimages = db.preimages.size()
 	}
-	return diffs, nodes, immutablenodes, preimages
+	return diffs, nodes, preimages
 }
 
 // Scheme returns the node scheme used in the database.
@@ -259,6 +274,11 @@ func (db *Database) InsertPreimage(preimages map[common.Hash][]byte) {
 		return
 	}
 	db.preimages.insertPreimage(preimages)
+}
+
+// PreimageEnabled returns the indicator if the pre-image store is enabled.
+func (db *Database) PreimageEnabled() bool {
+	return db.preimages != nil
 }
 
 // Cap iteratively flushes old but still referenced trie nodes until the total
@@ -348,6 +368,16 @@ func (db *Database) Enable(root common.Hash) error {
 	return pdb.Enable(root)
 }
 
+// AdoptSyncedState activates the database after a snap/2 sync and adopts the
+// flat state populated during sync as-is, skipping regeneration.
+func (db *Database) AdoptSyncedState(root common.Hash) error {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return errors.New("not supported")
+	}
+	return pdb.AdoptSyncedState(root)
+}
+
 // Journal commits an entire diff hierarchy to disk into a single journal entry.
 // This is meant to be used during shutdown to persist the snapshot without
 // flattening everything down (bad for reorgs). It's only supported by path-based
@@ -383,12 +413,112 @@ func (db *Database) GetAllRooHash() [][]string {
 	return pdb.GetAllRooHash()
 }
 
-// IsVerkle returns the indicator if the database is holding a verkle tree.
-func (db *Database) IsVerkle() bool {
-	return db.config.IsVerkle
+// VerifyState traverses the flat states specified by the given state root and
+// ensures they are matched with each other.
+func (db *Database) VerifyState(root common.Hash) error {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return errors.New("not supported")
+	}
+	return pdb.VerifyState(root)
+}
+
+// AccountIterator creates a new account iterator for the specified root hash and
+// seeks to a starting account hash.
+func (db *Database) AccountIterator(root common.Hash, seek common.Hash) (pathdb.AccountIterator, error) {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return nil, errors.New("not supported")
+	}
+	return pdb.AccountIterator(root, seek)
+}
+
+// StorageIterator creates a new storage iterator for the specified root hash and
+// account. The iterator will be move to the specific start position.
+func (db *Database) StorageIterator(root common.Hash, account common.Hash, seek common.Hash) (pathdb.StorageIterator, error) {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return nil, errors.New("not supported")
+	}
+	return pdb.StorageIterator(root, account, seek)
+}
+
+// IndexProgress returns the indexing progress made so far. It provides the
+// number of states that remain unindexed.
+func (db *Database) IndexProgress() (uint64, uint64, error) {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return 0, 0, errors.New("not supported")
+	}
+	return pdb.IndexProgress()
+}
+
+// IsUBT returns the indicator if the database is holding a verkle tree.
+func (db *Database) IsUBT() bool {
+	return db.config.IsUBT
 }
 
 // Disk returns the underlying disk database.
 func (db *Database) Disk() ethdb.Database {
 	return db.disk
+}
+
+// SnapshotCompleted returns the indicator if the snapshot is completed.
+func (db *Database) SnapshotCompleted() bool {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return false
+	}
+	return pdb.SnapshotCompleted()
+}
+
+func (db *Database) BinTrieGroupDepth() int {
+	return db.config.BinTrieGroupDepth
+}
+
+// MergeIncrState merges the state in incremental snapshot into base snapshot
+func (db *Database) MergeIncrState(incrDir string) error {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		log.Error("Not supported")
+		return nil
+	}
+	return pdb.MergeIncrState(incrDir)
+}
+
+// WriteContractCodes used to write contract codes into incremental db.
+func (db *Database) WriteContractCodes(codes map[common.Address]rawdb.ContractCode) error {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		log.Error("Not supported")
+		return errors.New("not supported WriteContractCodes")
+	}
+	return pdb.WriteContractCodes(codes)
+}
+
+// IsIncrEnabled returns true if incremental is enabled, otherwise false.
+func (db *Database) IsIncrEnabled() bool {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return false
+	}
+	return pdb.IsIncrEnabled()
+}
+
+// SetStateGenerator is used to set state generator.
+func (db *Database) SetStateGenerator() {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return
+	}
+	pdb.SetStateGenerator()
+}
+
+// GetStartBlock returns the start block number.
+func (db *Database) GetStartBlock() (uint64, error) {
+	pdb, ok := db.backend.(*pathdb.Database)
+	if !ok {
+		return 0, errors.New("not supported GetStartBlock")
+	}
+	return pdb.GetStartBlock()
 }

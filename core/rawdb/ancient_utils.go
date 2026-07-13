@@ -24,8 +24,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/metrics"
 )
 
 type tableSize struct {
@@ -38,12 +36,8 @@ type freezerInfo struct {
 	name  string      // The identifier of freezer
 	head  uint64      // The number of last stored item in the freezer
 	tail  uint64      // The number of first stored item in the freezer
+	count uint64      // The number of stored items in the freezer
 	sizes []tableSize // The storage size per table
-}
-
-// count returns the number of stored items in the freezer.
-func (info *freezerInfo) count() uint64 {
-	return info.head - info.tail + 1
 }
 
 // size returns the storage size of the entire freezer.
@@ -55,7 +49,7 @@ func (info *freezerInfo) size() common.StorageSize {
 	return total
 }
 
-func inspect(name string, order map[string]bool, reader ethdb.AncientReader) (freezerInfo, error) {
+func inspect(name string, order map[string]freezerTableConfig, reader ethdb.AncientReader) (freezerInfo, error) {
 	info := freezerInfo{name: name}
 	for t := range order {
 		size, err := reader.AncientSize(t)
@@ -69,7 +63,11 @@ func inspect(name string, order map[string]bool, reader ethdb.AncientReader) (fr
 	if err != nil {
 		return freezerInfo{}, err
 	}
-	info.head = ancients - 1
+	if ancients > 0 {
+		info.head = ancients - 1
+	} else {
+		info.head = 0
+	}
 
 	// Retrieve the number of first stored item
 	tail, err := reader.Tail()
@@ -77,6 +75,12 @@ func inspect(name string, order map[string]bool, reader ethdb.AncientReader) (fr
 		return freezerInfo{}, err
 	}
 	info.tail = tail
+
+	if ancients == 0 {
+		info.count = 0
+	} else {
+		info.count = info.head - info.tail + 1
+	}
 	return info, nil
 }
 
@@ -86,22 +90,18 @@ func inspectFreezers(db ethdb.Database) ([]freezerInfo, error) {
 	for _, freezer := range freezers {
 		switch freezer {
 		case ChainFreezerName:
-			info, err := inspect(ChainFreezerName, chainFreezerNoSnappy, db)
+			info, err := inspect(ChainFreezerName, chainFreezerTableConfigs, db)
 			if err != nil {
 				return nil, err
 			}
 			infos = append(infos, info)
 
 		case MerkleStateFreezerName, VerkleStateFreezerName:
-			if db.StateStore() != nil {
-				continue
-			}
 			datadir, err := db.AncientDatadir()
 			if err != nil {
 				return nil, err
 			}
 
-			// TODO(Nathan): handle VerkleStateFreezerName
 			file, err := os.Open(filepath.Join(datadir, MerkleStateFreezerName))
 			if err != nil {
 				return nil, err
@@ -119,7 +119,24 @@ func inspectFreezers(db ethdb.Database) ([]freezerInfo, error) {
 			}
 			defer f.Close()
 
-			info, err := inspect(freezer, stateFreezerNoSnappy, f)
+			info, err := inspect(freezer, stateFreezerTableConfigs, f)
+			if err != nil {
+				return nil, err
+			}
+			infos = append(infos, info)
+
+		case MerkleTrienodeFreezerName, VerkleTrienodeFreezerName:
+			datadir, err := db.AncientDatadir()
+			if err != nil {
+				return nil, err
+			}
+			f, err := NewTrienodeFreezer(datadir, freezer == VerkleTrienodeFreezerName, true)
+			if err != nil {
+				continue // might be possible the trienode freezer is not existent
+			}
+			defer f.Close()
+
+			info, err := inspect(freezer, trienodeFreezerTableConfigs, f)
 			if err != nil {
 				return nil, err
 			}
@@ -132,29 +149,50 @@ func inspectFreezers(db ethdb.Database) ([]freezerInfo, error) {
 	return infos, nil
 }
 
+func inspectIncrFreezers(db *snapDBWrapper) ([]freezerInfo, error) {
+	var infos []freezerInfo
+	for _, freezer := range freezers {
+		switch freezer {
+		case ChainFreezerName:
+			info, err := inspect(ChainFreezerName, incrChainFreezerTableConfigs, db.chainFreezer)
+			if err != nil {
+				return nil, err
+			}
+			infos = append(infos, info)
+
+		case MerkleStateFreezerName:
+			info, err := inspect(freezer, incrStateFreezerTableConfigs, db.stateFreezer)
+			if err != nil {
+				return nil, err
+			}
+			infos = append(infos, info)
+		case VerkleStateFreezerName:
+			continue
+
+		default:
+			return nil, fmt.Errorf("unknown freezer, supported ones: %v", freezers)
+		}
+	}
+	return infos, nil
+}
+
 // InspectFreezerTable dumps out the index of a specific freezer table. The passed
 // ancient indicates the path of root ancient directory where the chain freezer can
 // be opened. Start and end specify the range for dumping out indexes.
 // Note this function can only be used for debugging purposes.
-func InspectFreezerTable(ancient string, freezerName string, tableName string, start, end int64, multiDatabase bool) error {
+func InspectFreezerTable(ancient string, freezerName string, tableName string, start, end int64) error {
 	var (
 		path   string
-		tables map[string]bool
+		tables map[string]freezerTableConfig
 	)
 	switch freezerName {
 	case ChainFreezerName:
-		if multiDatabase {
-			path, tables = resolveChainFreezerDir(filepath.Dir(ancient)+"/block/ancient"), chainFreezerNoSnappy
-		} else {
-			path, tables = resolveChainFreezerDir(ancient), chainFreezerNoSnappy
-		}
+		path, tables = resolveChainFreezerDir(ancient), chainFreezerTableConfigs
 
 	case MerkleStateFreezerName, VerkleStateFreezerName:
-		if multiDatabase {
-			path, tables = filepath.Join(filepath.Dir(ancient)+"/state/ancient", freezerName), stateFreezerNoSnappy
-		} else {
-			path, tables = filepath.Join(ancient, freezerName), stateFreezerNoSnappy
-		}
+		path, tables = filepath.Join(ancient, freezerName), stateFreezerTableConfigs
+	case MerkleTrienodeFreezerName, VerkleTrienodeFreezerName:
+		path, tables = filepath.Join(ancient, freezerName), trienodeFreezerTableConfigs
 	default:
 		return fmt.Errorf("unknown freezer, supported ones: %v", freezers)
 	}
@@ -170,26 +208,7 @@ func InspectFreezerTable(ancient string, freezerName string, tableName string, s
 	if err != nil {
 		return err
 	}
+	defer table.Close()
 	table.dumpIndexStdout(start, end)
-	return nil
-}
-
-func ResetStateFreezerTableOffset(ancient string, virtualTail uint64) error {
-	path, tables := filepath.Join(ancient, MerkleStateFreezerName), stateFreezerNoSnappy
-
-	for name, disableSnappy := range tables {
-		log.Info("Handle table", "name", name, "disableSnappy", disableSnappy)
-		table, err := newTable(path, name, metrics.NewInactiveMeter(), metrics.NewInactiveMeter(), metrics.NewGauge(), freezerTableSize, disableSnappy, false)
-		if err != nil {
-			log.Error("New table failed", "error", err)
-			return err
-		}
-		// Reset the metadata of the freezer table
-		err = table.ResetItemsOffset(virtualTail)
-		if err != nil {
-			log.Error("Reset items offset of the table", "name", name, "error", err)
-			return err
-		}
-	}
 	return nil
 }

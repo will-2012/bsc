@@ -18,12 +18,12 @@ package blobpool
 
 import (
 	"container/heap"
+	"maps"
 	"math"
 	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/holiman/uint256"
-	"golang.org/x/exp/maps"
 )
 
 // evictHeap is a helper data structure to keep track of the cheapest bottleneck
@@ -54,8 +54,7 @@ func newPriceHeap(basefee *uint256.Int, blobfee *uint256.Int, index map[common.A
 	// Populate the heap in account sort order. Not really needed in practice,
 	// but it makes the heap initialization deterministic and less annoying to
 	// test in unit tests.
-	heap.addrs = maps.Keys(index)
-	slices.SortFunc(heap.addrs, common.Address.Cmp)
+	heap.addrs = slices.SortedFunc(maps.Keys(index), common.Address.Cmp)
 	for i, addr := range heap.addrs {
 		heap.index[addr] = i
 	}
@@ -68,7 +67,7 @@ func newPriceHeap(basefee *uint256.Int, blobfee *uint256.Int, index map[common.A
 func (h *evictHeap) reinit(basefee *uint256.Int, blobfee *uint256.Int, force bool) {
 	// If the update is mostly the same as the old, don't sort pointlessly
 	basefeeJumps := dynamicFeeJumps(basefee)
-	blobfeeJumps := dynamicFeeJumps(blobfee)
+	blobfeeJumps := dynamicBlobFeeJumps(blobfee)
 
 	if !force && math.Abs(h.basefeeJumps-basefeeJumps) < 0.01 && math.Abs(h.blobfeeJumps-blobfeeJumps) < 0.01 { // TODO(karalabe): 0.01 enough, maybe should be smaller? Maybe this optimization is moot?
 		return
@@ -96,13 +95,7 @@ func (h *evictHeap) Less(i, j int) bool {
 	lastJ := txsJ[len(txsJ)-1]
 
 	prioI := evictionPriority(h.basefeeJumps, lastI.evictionExecFeeJumps, h.blobfeeJumps, lastI.evictionBlobFeeJumps)
-	if prioI > 0 {
-		prioI = 0
-	}
 	prioJ := evictionPriority(h.basefeeJumps, lastJ.evictionExecFeeJumps, h.blobfeeJumps, lastJ.evictionBlobFeeJumps)
-	if prioJ > 0 {
-		prioJ = 0
-	}
 	if prioI == prioJ {
 		return lastI.evictionExecTip.Lt(lastJ.evictionExecTip)
 	}

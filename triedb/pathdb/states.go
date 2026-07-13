@@ -19,15 +19,17 @@ package pathdb
 import (
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"sync"
 
+	"github.com/VictoriaMetrics/fastcache"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
-	"golang.org/x/exp/maps"
 )
 
 // counter helps in tracking items and their corresponding sizes.
@@ -168,19 +170,19 @@ func (s *stateSet) accountList() []common.Hash {
 	if list != nil {
 		return list
 	}
-	// No old sorted account list exists, generate a new one. It's possible that
-	// multiple threads waiting for the write lock may regenerate the list
-	// multiple times, which is acceptable.
 	s.listLock.Lock()
 	defer s.listLock.Unlock()
 
-	list = maps.Keys(s.accountData)
-	slices.SortFunc(list, common.Hash.Cmp)
+	// Double check after acquiring the write lock
+	if list = s.accountListSorted; list != nil {
+		return list
+	}
+	list = slices.SortedFunc(maps.Keys(s.accountData), common.Hash.Cmp)
 	s.accountListSorted = list
 	return list
 }
 
-// StorageList returns a sorted list of all storage slot hashes in this state set
+// storageList returns a sorted list of all storage slot hashes in this state set
 // for the given account. The returned list will include the hash of deleted
 // storage slot.
 //
@@ -199,14 +201,14 @@ func (s *stateSet) storageList(accountHash common.Hash) []common.Hash {
 	}
 	s.listLock.RUnlock()
 
-	// No old sorted account list exists, generate a new one. It's possible that
-	// multiple threads waiting for the write lock may regenerate the list
-	// multiple times, which is acceptable.
 	s.listLock.Lock()
 	defer s.listLock.Unlock()
 
-	list := maps.Keys(s.storageData[accountHash])
-	slices.SortFunc(list, common.Hash.Cmp)
+	// Double check after acquiring the write lock
+	if list := s.storageListSorted[accountHash]; list != nil {
+		return list
+	}
+	list := slices.SortedFunc(maps.Keys(s.storageData[accountHash]), common.Hash.Cmp)
 	s.storageListSorted[accountHash] = list
 	return list
 }
@@ -330,6 +332,23 @@ func (s *stateSet) updateSize(delta int) {
 	s.size = 0
 }
 
+type statesData struct {
+	RawStorageKey bool
+	Acc           accounts
+	Storages      []storage
+}
+
+type accounts struct {
+	AddrHashes []common.Hash
+	Accounts   [][]byte
+}
+
+type storage struct {
+	AddrHash common.Hash
+	Keys     []common.Hash
+	Vals     [][]byte
+}
+
 // encode serializes the content of state set into the provided writer.
 func (s *stateSet) encode(w io.Writer) error {
 	// Encode accounts
@@ -340,7 +359,10 @@ func (s *stateSet) encode(w io.Writer) error {
 		AddrHashes []common.Hash
 		Accounts   [][]byte
 	}
-	var enc accounts
+	enc := accounts{
+		AddrHashes: make([]common.Hash, 0, len(s.accountData)),
+		Accounts:   make([][]byte, 0, len(s.accountData)),
+	}
 	for addrHash, blob := range s.accountData {
 		enc.AddrHashes = append(enc.AddrHashes, addrHash)
 		enc.Accounts = append(enc.Accounts, blob)
@@ -349,12 +371,7 @@ func (s *stateSet) encode(w io.Writer) error {
 		return err
 	}
 	// Encode storages
-	type Storage struct {
-		AddrHash common.Hash
-		Keys     []common.Hash
-		Vals     [][]byte
-	}
-	storages := make([]Storage, 0, len(s.storageData))
+	storages := make([]storage, 0, len(s.storageData))
 	for addrHash, slots := range s.storageData {
 		keys := make([]common.Hash, 0, len(slots))
 		vals := make([][]byte, 0, len(slots))
@@ -362,7 +379,7 @@ func (s *stateSet) encode(w io.Writer) error {
 			keys = append(keys, key)
 			vals = append(vals, val)
 		}
-		storages = append(storages, Storage{
+		storages = append(storages, storage{
 			AddrHash: addrHash,
 			Keys:     keys,
 			Vals:     vals,
@@ -376,10 +393,6 @@ func (s *stateSet) decode(r *rlp.Stream) error {
 	if err := r.Decode(&s.rawStorageKey); err != nil {
 		return fmt.Errorf("load diff raw storage key flag: %v", err)
 	}
-	type accounts struct {
-		AddrHashes []common.Hash
-		Accounts   [][]byte
-	}
 	var (
 		dec        accounts
 		accountSet = make(map[common.Hash][]byte)
@@ -387,17 +400,12 @@ func (s *stateSet) decode(r *rlp.Stream) error {
 	if err := r.Decode(&dec); err != nil {
 		return fmt.Errorf("load diff accounts: %v", err)
 	}
-	for i := 0; i < len(dec.AddrHashes); i++ {
-		accountSet[dec.AddrHashes[i]] = dec.Accounts[i]
+	for i := range dec.AddrHashes {
+		accountSet[dec.AddrHashes[i]] = empty2nil(dec.Accounts[i])
 	}
 	s.accountData = accountSet
 
 	// Decode storages
-	type storage struct {
-		AddrHash common.Hash
-		Keys     []common.Hash
-		Vals     [][]byte
-	}
 	var (
 		storages   []storage
 		storageSet = make(map[common.Hash]map[common.Hash][]byte)
@@ -407,8 +415,8 @@ func (s *stateSet) decode(r *rlp.Stream) error {
 	}
 	for _, entry := range storages {
 		storageSet[entry.AddrHash] = make(map[common.Hash][]byte, len(entry.Keys))
-		for i := 0; i < len(entry.Keys); i++ {
-			storageSet[entry.AddrHash][entry.Keys[i]] = entry.Vals[i]
+		for i := range entry.Keys {
+			storageSet[entry.AddrHash][entry.Keys[i]] = empty2nil(entry.Vals[i])
 		}
 	}
 	s.storageData = storageSet
@@ -416,6 +424,11 @@ func (s *stateSet) decode(r *rlp.Stream) error {
 
 	s.size = s.check()
 	return nil
+}
+
+// write flushes state mutations into the provided database batch as a whole.
+func (s *stateSet) write(batch ethdb.Batch, genMarker []byte, clean *fastcache.Cache) (int, int) {
+	return writeStates(batch, genMarker, s.accountData, s.storageData, clean)
 }
 
 // reset clears all cached state data, including any optional sorted lists that
@@ -429,8 +442,6 @@ func (s *stateSet) reset() {
 }
 
 // dbsize returns the approximate size for db write.
-//
-// nolint:unused
 func (s *stateSet) dbsize() int {
 	m := len(s.accountData) * len(rawdb.SnapshotAccountPrefix)
 	for _, slots := range s.storageData {
@@ -500,7 +511,10 @@ func (s *StateSetWithOrigin) encode(w io.Writer) error {
 		Addresses []common.Address
 		Accounts  [][]byte
 	}
-	var accounts Accounts
+	accounts := Accounts{
+		Addresses: make([]common.Address, 0, len(s.accountOrigin)),
+		Accounts:  make([][]byte, 0, len(s.accountOrigin)),
+	}
 	for address, blob := range s.accountOrigin {
 		accounts.Addresses = append(accounts.Addresses, address)
 		accounts.Accounts = append(accounts.Accounts, blob)
@@ -547,8 +561,8 @@ func (s *StateSetWithOrigin) decode(r *rlp.Stream) error {
 	if err := r.Decode(&accounts); err != nil {
 		return fmt.Errorf("load diff account origin set: %v", err)
 	}
-	for i := 0; i < len(accounts.Accounts); i++ {
-		accountSet[accounts.Addresses[i]] = accounts.Accounts[i]
+	for i := range accounts.Accounts {
+		accountSet[accounts.Addresses[i]] = empty2nil(accounts.Accounts[i])
 	}
 	s.accountOrigin = accountSet
 
@@ -567,10 +581,29 @@ func (s *StateSetWithOrigin) decode(r *rlp.Stream) error {
 	}
 	for _, storage := range storages {
 		storageSet[storage.Address] = make(map[common.Hash][]byte)
-		for i := 0; i < len(storage.Keys); i++ {
-			storageSet[storage.Address][storage.Keys[i]] = storage.Vals[i]
+		for i := range storage.Keys {
+			storageSet[storage.Address][storage.Keys[i]] = empty2nil(storage.Vals[i])
 		}
 	}
 	s.storageOrigin = storageSet
+
+	// Compute the size of origin data, keeping consistent with NewStateSetWithOrigin
+	var size int
+	for _, data := range s.accountOrigin {
+		size += common.HashLength + len(data)
+	}
+	for _, slots := range s.storageOrigin {
+		for _, data := range slots {
+			size += 2*common.HashLength + len(data)
+		}
+	}
+	s.size = s.stateSet.size + uint64(size)
 	return nil
+}
+
+func empty2nil(b []byte) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }

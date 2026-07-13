@@ -61,7 +61,7 @@ func (s *Server) WebsocketHandler(allowedOrigins []string, messageSizeLimit int6
 			log.Debug("WebSocket upgrade failed", "err", err)
 			return
 		}
-		limit := int64(wsDefaultReadLimit)
+		limit := s.wsReadLimit
 		if messageSizeLimit > 0 {
 			limit = messageSizeLimit
 		}
@@ -327,6 +327,16 @@ func newWebsocketCodec(conn *websocket.Conn, host string, req http.Header, readL
 }
 
 func (wc *websocketCodec) close() {
+	// Send a WebSocket Close frame before closing the underlying connection,
+	// so the server sees a clean 1000 (normal closure) instead of 1006 (abnormal).
+	wc.jsonCodec.encMu.Lock()
+	wc.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(wsPingWriteTimeout),
+	)
+	wc.jsonCodec.encMu.Unlock()
+
 	wc.jsonCodec.close()
 	wc.wg.Wait()
 }

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -40,7 +41,6 @@ import (
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
-	"golang.org/x/exp/maps"
 )
 
 // Chain is a lightweight blockchain-like store which can read a hivechain
@@ -51,6 +51,12 @@ type Chain struct {
 	state   map[common.Address]state.DumpAccount // state of head block
 	senders map[common.Address]*senderInfo
 	config  *params.ChainConfig
+
+	txInfo txInfo
+}
+
+type txInfo struct {
+	LargeReceiptBlock *uint64 `json:"tx-largereceipt"`
 }
 
 // NewChain takes the given chain.rlp file, and decodes and returns
@@ -74,12 +80,20 @@ func NewChain(dir string) (*Chain, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	var txInfo txInfo
+	err = common.LoadJSON(filepath.Join(dir, "txinfo.json"), &txInfo)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Chain{
 		genesis: gen,
 		blocks:  blocks,
 		state:   state,
 		senders: accounts,
 		config:  gen.Config,
+		txInfo:  txInfo,
 	}, nil
 }
 
@@ -166,8 +180,8 @@ func (c *Chain) RootAt(height int) common.Hash {
 // GetSender returns the address associated with account at the index in the
 // pre-funded accounts list.
 func (c *Chain) GetSender(idx int) (common.Address, uint64) {
-	accounts := maps.Keys(c.senders)
-	slices.SortFunc(accounts, common.Address.Cmp)
+	accounts := slices.SortedFunc(maps.Keys(c.senders), common.Address.Cmp)
+
 	addr := accounts[idx]
 	return addr, c.senders[addr].Nonce
 }

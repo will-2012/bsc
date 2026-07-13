@@ -24,6 +24,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // TestTransactionRollbackBehavior tests that calling Rollback on the simulated backend doesn't prevent subsequent
@@ -34,13 +37,18 @@ func TestTransactionRollbackBehavior(t *testing.T) {
 			testAddr:  {Balance: big.NewInt(10000000000000000)},
 			testAddr2: {Balance: big.NewInt(10000000000000000)},
 		},
+		// Disable Osaka to prevent blob v0→v1 conversion in blobpool.
+		// BSC does not support blob sidecar v1.
+		func(nodeConf *node.Config, ethConf *ethconfig.Config) {
+			ethConf.Genesis.Config.OsakaTime = nil
+		},
 	)
 	defer sim.Close()
 	client := sim.Client()
 
-	btx0 := testSendSignedTx(t, testKey, sim, true)
-	tx0 := testSendSignedTx(t, testKey2, sim, false)
-	tx1 := testSendSignedTx(t, testKey2, sim, false)
+	btx0 := testSendSignedTx(t, testKey, sim, true, 0)
+	tx0 := testSendSignedTx(t, testKey2, sim, false, 0)
+	tx1 := testSendSignedTx(t, testKey2, sim, false, 1)
 
 	sim.Rollback()
 
@@ -48,9 +56,15 @@ func TestTransactionRollbackBehavior(t *testing.T) {
 		t.Fatalf("all transactions were not rolled back")
 	}
 
-	btx2 := testSendSignedTx(t, testKey, sim, true)
-	tx2 := testSendSignedTx(t, testKey2, sim, false)
-	tx3 := testSendSignedTx(t, testKey2, sim, false)
+	// BEP-657: blob txs only allowed in blocks where N % BlobEligibleBlockInterval == 0.
+	// Advance block number so the next commit lands on a blob-eligible block.
+	for i := uint64(1); i < params.BlobEligibleBlockInterval; i++ {
+		sim.Commit()
+	}
+
+	btx2 := testSendSignedTx(t, testKey, sim, true, 0)
+	tx2 := testSendSignedTx(t, testKey2, sim, false, 0)
+	tx3 := testSendSignedTx(t, testKey2, sim, false, 1)
 
 	sim.Commit()
 
@@ -61,7 +75,7 @@ func TestTransactionRollbackBehavior(t *testing.T) {
 
 // testSendSignedTx sends a signed transaction to the simulated backend.
 // It does not commit the block.
-func testSendSignedTx(t *testing.T, key *ecdsa.PrivateKey, sim *Backend, isBlobTx bool) *types.Transaction {
+func testSendSignedTx(t *testing.T, key *ecdsa.PrivateKey, sim *Backend, isBlobTx bool, nonce uint64) *types.Transaction {
 	t.Helper()
 	client := sim.Client()
 	ctx := context.Background()
@@ -71,9 +85,9 @@ func testSendSignedTx(t *testing.T, key *ecdsa.PrivateKey, sim *Backend, isBlobT
 		signedTx *types.Transaction
 	)
 	if isBlobTx {
-		signedTx, err = newBlobTx(sim, key)
+		signedTx, err = newBlobTx(sim, key, nonce)
 	} else {
-		signedTx, err = newTx(sim, key)
+		signedTx, err = newTx(sim, key, nonce)
 	}
 	if err != nil {
 		t.Fatalf("failed to create transaction: %v", err)
@@ -96,13 +110,13 @@ func pendingStateHasTx(client Client, tx *types.Transaction) bool {
 	)
 
 	// Poll for receipt with timeout
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		receipt, err = client.TransactionReceipt(ctx, tx.Hash())
 		if err == nil && receipt != nil {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	if err != nil {

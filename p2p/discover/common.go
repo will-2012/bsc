@@ -17,10 +17,12 @@
 package discover
 
 import (
+	"container/list"
 	"crypto/ecdsa"
 	crand "crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"iter"
 	"math/rand"
 	"net"
 	"net/netip"
@@ -70,6 +72,22 @@ func ParseEthFilter(chain string) (NodeFilterFunc, error) {
 		return filter(eth.ForkID) == nil
 	}
 	return f, nil
+}
+
+func GetEthEntry(chain string) (enr.Entry, error) {
+	var eth struct {
+		ForkID forkid.ID
+		Tail   []rlp.RawValue `rlp:"tail"`
+	}
+	switch chain {
+	case "bsc":
+		eth.ForkID = forkid.NewID(params.BSCChainConfig, core.DefaultBSCGenesisBlock().ToBlock(), uint64(0), uint64(0))
+	case "chapel":
+		eth.ForkID = forkid.NewID(params.ChapelChainConfig, core.DefaultChapelGenesisBlock().ToBlock(), uint64(0), uint64(0))
+	default:
+		return nil, fmt.Errorf("unknown network %q", chain)
+	}
+	return enr.WithEntry("eth", &eth), nil
 }
 
 // Config holds settings for the discovery listener.
@@ -176,4 +194,17 @@ func (r *reseedingRandom) Shuffle(n int, swap func(i, j int)) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.cur.Shuffle(n, swap)
+}
+
+// iterList iterates over the elements of the given list.
+func iterList[T any](l *list.List) iter.Seq2[T, *list.Element] {
+	return func(yield func(T, *list.Element) bool) {
+		for el := l.Front(); el != nil; {
+			next := el.Next()
+			if !yield(el.Value.(T), el) {
+				return
+			}
+			el = next
+		}
+	}
 }

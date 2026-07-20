@@ -1566,6 +1566,7 @@ func (d *Downloader) processSnapSyncContent() error {
 		if oldPivot == nil { // no results piling up, we can move the pivot
 			if !d.committed.Load() { // not yet passed the pivot, we can move the pivot
 				if pivot.Root != sync.root { // pivot position changed, we can move the pivot
+					log.Warn("Restarting snap state sync for moved pivot root", "oldRoot", sync.root, "newRoot", pivot.Root, "pivot", pivot.Number.Uint64())
 					sync.Cancel()
 					sync = d.syncState(pivot.Root)
 
@@ -1582,6 +1583,7 @@ func (d *Downloader) processSnapSyncContent() error {
 		if P != nil {
 			// If new pivot block found, cancel old state retrieval and restart
 			if oldPivot != P {
+				log.Warn("Restarting snap state sync for pivot block", "oldRoot", sync.root, "newRoot", P.Header.Root, "pivot", P.Header.Number.Uint64())
 				sync.Cancel()
 				sync = d.syncState(P.Header.Root)
 

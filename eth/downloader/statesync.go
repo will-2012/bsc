@@ -27,6 +27,7 @@ import (
 func (d *Downloader) syncState(root common.Hash) *stateSync {
 	// Create the state sync
 	s := newStateSync(d, root)
+	log.Info("Scheduling snap state sync", "root", root)
 	select {
 	case d.stateSyncStart <- s:
 		// If we tell the statesync to restart with a new root, we also need
@@ -58,7 +59,7 @@ func (d *Downloader) stateFetcher() {
 // runStateSync runs a state synchronisation until it completes or another root
 // hash is requested to be switched over to.
 func (d *Downloader) runStateSync(s *stateSync) *stateSync {
-	log.Trace("State sync starting", "root", s.root)
+	log.Info("Snap state sync loop starting", "root", s.root)
 
 	go s.run()
 	defer s.Cancel()
@@ -66,9 +67,11 @@ func (d *Downloader) runStateSync(s *stateSync) *stateSync {
 	for {
 		select {
 		case next := <-d.stateSyncStart:
+			log.Warn("Snap state sync loop switching root", "old", s.root, "new", next.root)
 			return next
 
 		case <-s.done:
+			log.Info("Snap state sync loop finished", "root", s.root, "err", s.err)
 			return nil
 		}
 	}

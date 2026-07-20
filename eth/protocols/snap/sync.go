@@ -2972,8 +2972,12 @@ func (s *Syncer) OnStorage(peer SyncPeer, id uint64, hashes [][]common.Hash, slo
 	// retrieved was either already pruned remotely, or the peer is not yet
 	// synced to our head.
 	if len(hashes) == 0 && len(proof) == 0 {
-		logger.Info("Peer rejected storage request")
-		s.statelessPeers[peer.ID()] = struct{}{}
+		if req.subTask != nil {
+			logger.Info("Peer rejected large storage subtask request, keeping peer eligible")
+		} else {
+			logger.Info("Peer rejected storage request")
+			s.statelessPeers[peer.ID()] = struct{}{}
+		}
 		s.lock.Unlock()
 		s.scheduleRevertStorageRequest(req) // reschedule request
 		return nil

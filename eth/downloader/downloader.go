@@ -1583,11 +1583,15 @@ func (d *Downloader) processSnapSyncContent() error {
 		if P != nil {
 			// If new pivot block found, cancel old state retrieval and restart
 			if oldPivot != P {
-				log.Warn("Restarting snap state sync for pivot block", "oldRoot", sync.root, "newRoot", P.Header.Root, "pivot", P.Header.Number.Uint64())
-				sync.Cancel()
-				sync = d.syncState(P.Header.Root)
+				if sync.root != P.Header.Root {
+					log.Warn("Restarting snap state sync for pivot block", "oldRoot", sync.root, "newRoot", P.Header.Root, "pivot", P.Header.Number.Uint64())
+					sync.Cancel()
+					sync = d.syncState(P.Header.Root)
 
-				go closeOnErr(sync)
+					go closeOnErr(sync)
+				} else {
+					log.Info("Pivot block advanced without state root change, keeping current snap state sync", "root", sync.root, "pivot", P.Header.Number.Uint64())
+				}
 				oldPivot = P
 			}
 			// Wait for completion, occasionally checking for pivot staleness

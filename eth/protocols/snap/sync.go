@@ -2732,7 +2732,7 @@ func (s *Syncer) OnAccounts(peer SyncPeer, id uint64, hashes []common.Hash, acco
 	// retrieved was either already pruned remotely, or the peer is not yet
 	// synced to our head.
 	if len(hashes) == 0 && len(accounts) == 0 && len(proof) == 0 {
-		logger.Debug("Peer rejected account range request", "root", s.root)
+		logger.Info("Peer rejected account range request", "root", s.root)
 		s.statelessPeers[peer.ID()] = struct{}{}
 		s.lock.Unlock()
 
@@ -2843,7 +2843,7 @@ func (s *Syncer) onByteCodes(peer SyncPeer, id uint64, bytecodes [][]byte) error
 	// the requested data. For bytecode range queries that means the peer is not
 	// yet synced.
 	if len(bytecodes) == 0 {
-		logger.Debug("Peer rejected bytecode request")
+		logger.Info("Peer rejected bytecode request")
 		s.statelessPeers[peer.ID()] = struct{}{}
 		s.lock.Unlock()
 
@@ -2972,7 +2972,7 @@ func (s *Syncer) OnStorage(peer SyncPeer, id uint64, hashes [][]common.Hash, slo
 	// retrieved was either already pruned remotely, or the peer is not yet
 	// synced to our head.
 	if len(hashes) == 0 && len(proof) == 0 {
-		logger.Debug("Peer rejected storage request")
+		logger.Info("Peer rejected storage request")
 		s.statelessPeers[peer.ID()] = struct{}{}
 		s.lock.Unlock()
 		s.scheduleRevertStorageRequest(req) // reschedule request

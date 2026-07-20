@@ -97,6 +97,10 @@ const (
 
 	// batchSizeThreshold is the maximum size allowed for gentrie batch.
 	batchSizeThreshold = 8 * 1024 * 1024
+
+	// snapSyncDebugHeartbeat controls how often the sync loop emits a scheduler
+	// snapshot while waiting for more work or responses.
+	snapSyncDebugHeartbeat = 30 * time.Second
 )
 
 var (
@@ -351,6 +355,146 @@ func (task *accountTask) activeSubTasks() map[common.Hash][]*storageTask {
 		}
 	}
 	return tasks
+}
+
+func snapSubTaskStats(task *accountTask) (owners, activeOwners, subtasks, activeSubtasks, inflight int) {
+	for _, chunkSet := range task.SubTasks {
+		owners++
+		subtasks += len(chunkSet)
+		for _, chunk := range chunkSet {
+			if chunk.req != nil {
+				inflight++
+			}
+		}
+	}
+	if task.res == nil {
+		return owners, 0, subtasks, 0, inflight
+	}
+	for _, chunkSet := range task.activeSubTasks() {
+		activeOwners++
+		activeSubtasks += len(chunkSet)
+	}
+	return owners, activeOwners, subtasks, activeSubtasks, inflight
+}
+
+func snapTaskInteresting(task *accountTask) bool {
+	if task.req != nil || task.res != nil || task.pend > 0 || task.done {
+		return true
+	}
+	if len(task.codeTasks) > 0 || len(task.stateTasks) > 0 || len(task.stateCompleted) > 0 {
+		return true
+	}
+	return len(task.SubTasks) > 0
+}
+
+func snapTaskSummary(task *accountTask, index int) string {
+	owners, activeOwners, subtasks, activeSubtasks, inflight := snapSubTaskStats(task)
+	return fmt.Sprintf(
+		"#%d{next=%s last=%s req=%t res=%t pend=%d state=%d code=%d subowners=%d activeOwners=%d subtasks=%d activeSubtasks=%d inflight=%d completed=%d done=%t}",
+		index,
+		task.Next.TerminalString(),
+		task.Last.TerminalString(),
+		task.req != nil,
+		task.res != nil,
+		task.pend,
+		len(task.stateTasks),
+		len(task.codeTasks),
+		owners,
+		activeOwners,
+		subtasks,
+		activeSubtasks,
+		inflight,
+		len(task.stateCompleted),
+		task.done,
+	)
+}
+
+func (s *Syncer) debugLogSyncStatus(reason string, ctx ...interface{}) {
+	s.lock.RLock()
+	peers := len(s.peers)
+	statelessPeers := len(s.statelessPeers)
+	accountIdlers := len(s.accountIdlers)
+	storageIdlers := len(s.storageIdlers)
+	bytecodeIdlers := len(s.bytecodeIdlers)
+	trienodeHealIdlers := len(s.trienodeHealIdlers)
+	bytecodeHealIdlers := len(s.bytecodeHealIdlers)
+	accountReqs := len(s.accountReqs)
+	storageReqs := len(s.storageReqs)
+	bytecodeReqs := len(s.bytecodeReqs)
+	trienodeHealReqs := len(s.trienodeHealReqs)
+	bytecodeHealReqs := len(s.bytecodeHealReqs)
+	s.lock.RUnlock()
+
+	var (
+		doneTasks       int
+		taskReqs        int
+		taskResps       int
+		taskPend        int
+		stateTasks      int
+		codeTasks       int
+		stateCompleted  int
+		subOwners       int
+		activeSubOwners int
+		subtasks        int
+		activeSubtasks  int
+		subInflight     int
+		samples         []string
+	)
+	for i, task := range s.tasks {
+		if task.done {
+			doneTasks++
+		}
+		if task.req != nil {
+			taskReqs++
+		}
+		if task.res != nil {
+			taskResps++
+		}
+		taskPend += task.pend
+		stateTasks += len(task.stateTasks)
+		codeTasks += len(task.codeTasks)
+		stateCompleted += len(task.stateCompleted)
+
+		owners, activeOwners, chunks, activeChunks, inflight := snapSubTaskStats(task)
+		subOwners += owners
+		activeSubOwners += activeOwners
+		subtasks += chunks
+		activeSubtasks += activeChunks
+		subInflight += inflight
+
+		if len(samples) < 3 && (i == 0 || snapTaskInteresting(task)) {
+			samples = append(samples, snapTaskSummary(task, i))
+		}
+	}
+	fields := []interface{}{
+		"reason", reason,
+		"root", s.root,
+		"snapped", s.snapped,
+		"tasks", len(s.tasks),
+		"doneTasks", doneTasks,
+		"peers", peers,
+		"statelessPeers", statelessPeers,
+		"idlers", fmt.Sprintf("accounts=%d storage=%d bytecode=%d trieHeal=%d bytecodeHeal=%d", accountIdlers, storageIdlers, bytecodeIdlers, trienodeHealIdlers, bytecodeHealIdlers),
+		"reqs", fmt.Sprintf("accounts=%d storage=%d bytecode=%d trieHeal=%d bytecodeHeal=%d", accountReqs, storageReqs, bytecodeReqs, trienodeHealReqs, bytecodeHealReqs),
+		"taskState", fmt.Sprintf("taskReq=%d taskResp=%d pend=%d state=%d code=%d completed=%d subOwners=%d activeSubOwners=%d subtasks=%d activeSubtasks=%d subInflight=%d", taskReqs, taskResps, taskPend, stateTasks, codeTasks, stateCompleted, subOwners, activeSubOwners, subtasks, activeSubtasks, subInflight),
+		"progress", fmt.Sprintf("accounts=%d slots=%d codes=%d trieHeal=%d bytecodeHeal=%d", s.accountSynced, s.storageSynced, s.bytecodeSynced, s.trienodeHealSynced, s.bytecodeHealSynced),
+	}
+	if len(samples) > 0 {
+		fields = append(fields, "sampleTasks", samples)
+	}
+	fields = append(fields, ctx...)
+	log.Info("Snap sync scheduler state", fields...)
+}
+
+func (s *Syncer) debugLogRunnableGap(reason string, task *accountTask) {
+	if task == nil || task.pend == 0 {
+		return
+	}
+	_, _, _, activeSubtasks, _ := snapSubTaskStats(task)
+	if len(task.stateTasks) > 0 || len(task.codeTasks) > 0 || activeSubtasks > 0 {
+		return
+	}
+	s.debugLogSyncStatus(reason, "taskNext", task.Next, "taskLast", task.Last, "taskPend", task.pend)
 }
 
 // storageTask represents the sync task for a chunk of the storage snapshot.
@@ -683,6 +827,9 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 		trienodeHealResps    = make(chan *trienodeHealResponse)
 		bytecodeHealResps    = make(chan *bytecodeHealResponse)
 	)
+	stallTicker := time.NewTicker(snapSyncDebugHeartbeat)
+	defer stallTicker.Stop()
+	s.debugLogSyncStatus("sync-start")
 	for {
 		// Remove all completed tasks and terminate sync if everything's done
 		s.cleanStorageTasks()
@@ -741,8 +888,11 @@ func (s *Syncer) Sync(root common.Hash, cancel chan struct{}) error {
 			// A new peer joined, try to schedule it new tasks
 		case id := <-peerDrop:
 			s.revertRequests(id)
+			s.debugLogSyncStatus("peer-drop", "peer", id)
 		case <-cancel:
 			return ErrCancelled
+		case <-stallTicker.C:
+			s.debugLogSyncStatus("heartbeat")
 
 		case req := <-accountReqFails:
 			s.revertAccountRequest(req)
@@ -1085,7 +1235,7 @@ func (s *Syncer) assignAccountTasks(success chan *accountResponse, fail chan *ac
 			task:    task,
 		}
 		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
-			peer.Log().Debug("Account range request timed out", "reqid", reqid)
+			log.Warn("Snap account request timed out", "peer", idle, "reqid", reqid, "origin", req.origin, "limit", req.limit)
 			s.rates.Update(idle, AccountRangeMsg, 0, 0)
 			s.scheduleRevertAccountRequest(req)
 		})
@@ -1197,7 +1347,7 @@ func (s *Syncer) assignBytecodeTasks(success chan *bytecodeResponse, fail chan *
 			task:    task,
 		}
 		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
-			peer.Log().Debug("Bytecode request timed out", "reqid", reqid)
+			log.Warn("Snap bytecode request timed out", "peer", idle, "reqid", reqid, "hashes", len(hashes))
 			s.rates.Update(idle, ByteCodesMsg, 0, 0)
 			s.scheduleRevertBytecodeRequest(req)
 		})
@@ -1345,7 +1495,7 @@ func (s *Syncer) assignStorageTasks(success chan *storageResponse, fail chan *st
 			req.limit = subtask.Last
 		}
 		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
-			peer.Log().Debug("Storage request timed out", "reqid", reqid)
+			log.Warn("Snap storage request timed out", "peer", idle, "reqid", reqid, "accounts", len(accounts), "subtask", subtask != nil)
 			s.rates.Update(idle, StorageRangesMsg, 0, 0)
 			s.scheduleRevertStorageRequest(req)
 		})
@@ -1483,7 +1633,7 @@ func (s *Syncer) assignTrienodeHealTasks(success chan *trienodeHealResponse, fai
 			task:    s.healer,
 		}
 		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
-			peer.Log().Debug("Trienode heal request timed out", "reqid", reqid)
+			log.Warn("Snap trienode heal request timed out", "peer", idle, "reqid", reqid, "paths", len(paths))
 			s.rates.Update(idle, TrieNodesMsg, 0, 0)
 			s.scheduleRevertTrienodeHealRequest(req)
 		})
@@ -1600,7 +1750,7 @@ func (s *Syncer) assignBytecodeHealTasks(success chan *bytecodeHealResponse, fai
 			task:    s.healer,
 		}
 		req.timeout = time.AfterFunc(s.rates.TargetTimeout(), func() {
-			peer.Log().Debug("Bytecode heal request timed out", "reqid", reqid)
+			log.Warn("Snap bytecode heal request timed out", "peer", idle, "reqid", reqid, "hashes", len(hashes))
 			s.rates.Update(idle, ByteCodesMsg, 0, 0)
 			s.scheduleRevertBytecodeHealRequest(req)
 		})
@@ -1718,6 +1868,7 @@ func (s *Syncer) revertAccountRequest(req *accountRequest) {
 	if req.task.req == req {
 		req.task.req = nil
 	}
+	s.debugLogSyncStatus("account-revert", "peer", req.peer, "reqid", req.id)
 }
 
 // scheduleRevertBytecodeRequest asks the event loop to clean up a bytecode request
@@ -1763,6 +1914,7 @@ func (s *Syncer) revertBytecodeRequest(req *bytecodeRequest) {
 	for _, hash := range req.hashes {
 		req.task.codeTasks[hash] = struct{}{}
 	}
+	s.debugLogSyncStatus("bytecode-revert", "peer", req.peer, "reqid", req.id, "hashes", len(req.hashes))
 }
 
 // scheduleRevertStorageRequest asks the event loop to clean up a storage range
@@ -1812,6 +1964,7 @@ func (s *Syncer) revertStorageRequest(req *storageRequest) {
 			req.mainTask.stateTasks[account] = req.roots[i]
 		}
 	}
+	s.debugLogSyncStatus("storage-revert", "peer", req.peer, "reqid", req.id, "accounts", len(req.accounts), "subtask", req.subTask != nil)
 }
 
 // scheduleRevertTrienodeHealRequest asks the event loop to clean up a trienode heal
@@ -2016,6 +2169,7 @@ func (s *Syncer) processAccountResponse(res *accountResponse) {
 			}
 		}
 	}
+	s.debugLogRunnableGap("account-response-no-runnable-work", res.task)
 	// If the account range contained no contracts, or all have been fully filled
 	// beforehand, short circuit storage filling and forward to the next task
 	if res.task.pend == 0 {
@@ -2309,6 +2463,7 @@ func (s *Syncer) processStorageResponse(res *storageResponse) {
 	}
 	// Some accounts are still incomplete, leave as is for the storage and contract
 	// task assigners to pick up and fill.
+	s.debugLogRunnableGap("storage-response-no-runnable-work", res.mainTask)
 }
 
 // processTrienodeHealResponse integrates an already validated trienode response
@@ -2569,6 +2724,7 @@ func (s *Syncer) OnAccounts(peer SyncPeer, id uint64, hashes []common.Hash, acco
 	if !req.timeout.Stop() {
 		// The timeout is already triggered, and this request will be reverted+rescheduled
 		s.lock.Unlock()
+		logger.Info("Account range response arrived after timeout")
 		return nil
 	}
 	// Response is valid, but check if peer is signalling that it does not have
@@ -2679,6 +2835,7 @@ func (s *Syncer) onByteCodes(peer SyncPeer, id uint64, bytecodes [][]byte) error
 	if !req.timeout.Stop() {
 		// The timeout is already triggered, and this request will be reverted+rescheduled
 		s.lock.Unlock()
+		logger.Info("Bytecode response arrived after timeout")
 		return nil
 	}
 
@@ -2792,6 +2949,7 @@ func (s *Syncer) OnStorage(peer SyncPeer, id uint64, hashes [][]common.Hash, slo
 	if !req.timeout.Stop() {
 		// The timeout is already triggered, and this request will be reverted+rescheduled
 		s.lock.Unlock()
+		logger.Info("Storage response arrived after timeout")
 		return nil
 	}
 

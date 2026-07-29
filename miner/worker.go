@@ -170,16 +170,6 @@ func (env *environment) laneClassOf(tx *types.Transaction) paymentlane.Class {
 	return paymentlane.Classify(tx)
 }
 
-// accountLane 把一笔交易的 gas 记到对应类别的桶。
-//
-// usedBefore 必须由调用方在 ApplyTransaction 紧邻处取快照 —— 取早了会把无关
-// 的池变动（例如 bid 路径在循环之前做的 payBidTx 预留）算成这一笔的消耗。
-func (env *environment) accountLane(class paymentlane.Class, usedBefore uint64) {
-	if env.laneOn {
-		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
-	}
-}
-
 // sealLane 把车道记账写进 header 承诺，并用与导入侧相同的判据自检。
 //
 // 失败即放弃出块。丢一个槽位远好过广播一个全网必然拒收的块 —— 后者会让
@@ -865,7 +855,7 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction, class
 	var (
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Snapshot()
-		// 在 ApplyTransaction 紧邻处取池计数快照。取早了会把无关的池变动
+		// 紧邻 ApplyTransaction 取池计数快照。取早了会把无关的池变动
 		// （例如 bid 路径在循环之前做的 SubGas(PayBidTxGasLimit)）算成这一笔
 		// 的消耗，承诺随之虚高。
 		usedBefore = env.gasPool.Used()
@@ -873,12 +863,13 @@ func (w *worker) applyTransaction(env *environment, tx *types.Transaction, class
 
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, receiptProcessors...)
 	if err != nil {
-		// 池被恢复 ⇒ 下面 accountLane 算出的 delta 为 0，两个桶自动不受影响，
-		// 不需要单独的桶回滚路径。
+		// 池被恢复 ⇒ 下面的差分为 0，两个桶自动不受影响，不需要单独的回滚路径。
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.Set(gp)
 	}
-	env.accountLane(class, usedBefore)
+	if env.laneOn {
+		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
+	}
 	env.header.GasUsed = env.gasPool.Used()
 	return receipt, err
 }

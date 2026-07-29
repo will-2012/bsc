@@ -1445,7 +1445,9 @@ func (r *BidRuntime) commitTransactionAs(chain *core.BlockChain, chainConfig *pa
 	}
 	// 记账放在 unRevertible 检查之前：那条检查失败时 ApplyTransaction 已经成功、
 	// 池已经推进，若先返回就会留下 桶之和 != gasPool.Used() 的局部破裂状态。
-	env.accountLane(class, usedBefore)
+	if env.laneOn {
+		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
+	}
 	if unRevertible && receipt.Status == types.ReceiptStatusFailed {
 		return errors.New("no revertible transaction failed")
 	}

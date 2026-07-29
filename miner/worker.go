@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/consensus/parlia"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
@@ -135,6 +136,67 @@ type environment struct {
 	// discarded by its clearLoop). The worker must not discard it even when a
 	// winning bid's env becomes w.current, or the EVM arena is released twice.
 	fromBid bool
+
+	// BEP-703 车道。laneOn 是硬分叉门的快照，避免打包热路径每笔交易都重新
+	// 求值；它为 false 时下面所有车道分支都是死代码，打包行为与分叉前逐字一致。
+	//
+	// gasPool 仍然是唯一的池，容量仍是 GasLimit-gasReserved。车道不是第二个池：
+	// 静态切分预算等价于装箱问题，会拒绝规则本来允许的区块（见 paymentlane.Budget）。
+	// 取而代之的是分别累计两类交易已消耗的 gas，再把 §3.2 的不等式直接当准入
+	// 谓词用 —— laneBudget 就是这两个累计量加上本块配额。
+	laneOn      bool
+	laneBudget  paymentlane.Budget
+	gasReserved uint64 // Parlia 系统交易预留，出块前自检要用
+	// laneOn 时的不变式：laneBudget.PaymentUsed+GeneralUsed == gasPool.Used()
+}
+
+// laneAdmits 报告某类别的交易能否装进本块。
+//
+// 共享余量取 gasPool.Gas() 而不是自己重算，这样 bid 路径上
+// SubGas(PayBidTxGasLimit) 那 25000 的临时预留天然被尊重。
+func (env *environment) laneAdmits(class paymentlane.Class, gasLimit uint64) bool {
+	if !env.laneOn {
+		return gasLimit <= env.gasPool.Gas()
+	}
+	return env.laneBudget.Admits(env.gasPool.Gas(), class, gasLimit)
+}
+
+// laneClassOf 给一笔外来交易定类别。车道未激活时一律 general —— 这样「未分类」
+// 就不再是一个可能的状态，Account 因此不需要失败模式。
+func (env *environment) laneClassOf(tx *types.Transaction) paymentlane.Class {
+	if !env.laneOn {
+		return paymentlane.ClassGeneral
+	}
+	return paymentlane.Classify(tx)
+}
+
+// accountLane 把一笔交易的 gas 记到对应类别的桶。
+//
+// usedBefore 必须由调用方在 ApplyTransaction 紧邻处取快照 —— 取早了会把无关
+// 的池变动（例如 bid 路径在循环之前做的 payBidTx 预留）算成这一笔的消耗。
+func (env *environment) accountLane(class paymentlane.Class, usedBefore uint64) {
+	if env.laneOn {
+		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
+	}
+}
+
+// sealLane 把车道记账写进 header 承诺，并用与导入侧相同的判据自检。
+//
+// 失败即放弃出块。丢一个槽位远好过广播一个全网必然拒收的块 —— 后者会让
+// validator 持续出坏块直到被 jail，而 ValidateBody 与 VerifyHeader 都指不出
+// 原因，日志里只有 BAD_BLOCK。
+func (env *environment) sealLane() error {
+	if !env.laneOn {
+		return nil
+	}
+	// 承诺的三个值全部来自 laneBudget —— 配额既是本块的打包预算，也是下一块
+	// 递推的起点，一个值两个用途，不需要额外字段。
+	env.header.UncleHash = paymentlane.Encode(paymentlane.Commitment{
+		LaneSize:       env.laneBudget.LaneSize,
+		GeneralGasUsed: env.laneBudget.GeneralUsed,
+		PaymentGasUsed: env.laneBudget.PaymentUsed,
+	})
+	return env.laneBudget.Verify(env.header.GasLimit, env.gasReserved, env.gasPool.Used())
 }
 
 // discard terminates the background prefetcher go-routine. It should
@@ -726,26 +788,38 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:   types.MakeSigner(w.chainConfig, header.Number, header.Time),
-		state:    state,
-		size:     uint64(header.Size()),
-		coinbase: coinbase,
-		gasPool:  core.NewGasPool(header.GasLimit - gasReserved),
-		header:   header,
-		witness:  state.Witness(),
-		evm:      vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		signer:      types.MakeSigner(w.chainConfig, header.Number, header.Time),
+		state:       state,
+		size:        uint64(header.Size()),
+		coinbase:    coinbase,
+		gasPool:     core.NewGasPool(header.GasLimit - gasReserved),
+		gasReserved: gasReserved,
+		header:      header,
+		witness:     state.Witness(),
+		evm:         vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+	}
+	// BEP-703。配额只依赖 (parent, header)，所以块内是常量；commitWork 的多轮
+	// 重试每轮重建 env 但看到同一个值，轮间因此可比较。
+	//
+	// 这里刻意不对 laneSize 做任何钳制 —— 出块侧唯一能用来钳的量是
+	// gasReserved，而它是矿工本地的启发式上界，验证方看不到，钳了就是共识
+	// 分歧（详见 paymentlane.Budget 的注释）。配额真的大于本块可用预算时，
+	// Headroom 会把 general 压到 0、sealLane 的自检再决定这个块能不能出。
+	if paymentlane.Enabled(w.chainConfig, header.Number, header.Time) {
+		env.laneOn = true
+		env.laneBudget = paymentlane.Budget{LaneSize: paymentlane.Quota(parent, header)}
 	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
 	return env, nil
 }
 
-func (w *worker) commitTransaction(env *environment, tx *types.Transaction, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
+func (w *worker) commitTransaction(env *environment, tx *types.Transaction, class paymentlane.Class, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
 	if tx.Type() == types.BlobTxType {
-		return w.commitBlobTransaction(env, tx, receiptProcessors...)
+		return w.commitBlobTransaction(env, tx, class, receiptProcessors...)
 	}
 
-	receipt, err := w.applyTransaction(env, tx, receiptProcessors...)
+	receipt, err := w.applyTransaction(env, tx, class, receiptProcessors...)
 	if err != nil {
 		return nil, err
 	}
@@ -756,7 +830,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction, rece
 	return receipt.Logs, nil
 }
 
-func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
+func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, class paymentlane.Class, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
 	sc := types.NewBlobSidecarFromTx(tx)
 	if sc == nil {
 		panic("blob transaction without blobs in miner")
@@ -770,7 +844,7 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, 
 		return nil, errors.New("max data blobs reached")
 	}
 
-	receipt, err := w.applyTransaction(env, tx, receiptProcessors...)
+	receipt, err := w.applyTransaction(env, tx, class, receiptProcessors...)
 	if err != nil {
 		return nil, err
 	}
@@ -787,17 +861,24 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, 
 }
 
 // applyTransaction runs the transaction. If execution fails, state and gas pool are reverted.
-func (w *worker) applyTransaction(env *environment, tx *types.Transaction, receiptProcessors ...core.ReceiptProcessor) (*types.Receipt, error) {
+func (w *worker) applyTransaction(env *environment, tx *types.Transaction, class paymentlane.Class, receiptProcessors ...core.ReceiptProcessor) (*types.Receipt, error) {
 	var (
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Snapshot()
+		// 在 ApplyTransaction 紧邻处取池计数快照。取早了会把无关的池变动
+		// （例如 bid 路径在循环之前做的 SubGas(PayBidTxGasLimit)）算成这一笔
+		// 的消耗，承诺随之虚高。
+		usedBefore = env.gasPool.Used()
 	)
 
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, receiptProcessors...)
 	if err != nil {
+		// 池被恢复 ⇒ 下面 accountLane 算出的 delta 为 0，两个桶自动不受影响，
+		// 不需要单独的桶回滚路径。
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.Set(gp)
 	}
+	env.accountLane(class, usedBefore)
 	env.header.GasUsed = env.gasPool.Used()
 	return receipt, err
 }
@@ -847,6 +928,18 @@ LOOP:
 			}
 		}
 		// If we don't have enough gas for any further transactions then we're done.
+		//
+		// BEP-703 不需要改这一行，穷举可证：payment 谓词是两者中更松的那个
+		// （它不减 IdleLane），所以「两个类别都装不下 TxGas」⟺「共享余量 <
+		// TxGas」，与原判据完全等价。
+		//
+		// 反面教材是拿 laneRemaining 当「车道还能不能收」的代理量：车道是从
+		// 共享池取 gas 的，laneRemaining 只表示车道还「想要」多少。写成
+		// `shared < laneRemaining+TxGas && laneRemaining < TxGas` 会在两个方向
+		// 同时出错 —— shared 已归零而 laneRemaining 仍大于 TxGas 时不肯停
+		// （把整个堆 Pop 光才退出，正是拥堵块尾部的常态）；laneRemaining 小于
+		// TxGas 而 shared 仍有 [TxGas, laneRemaining+TxGas) 的余量时又提前停
+		// （放弃本可打包的 payment 交易）。
 		if env.gasPool.Gas() < params.TxGas {
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
 			signal = commitInterruptOutOfGas
@@ -895,10 +988,38 @@ LOOP:
 		}
 
 		// If we don't have enough space for the next transaction, skip the account.
-		if env.gasPool.Gas() < ltx.Gas {
-			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
-			txs.Pop()
-			continue
+		//
+		// general 谓词是两者中更严的那个（它多减一个非负的 IdleLane），所以凡是
+		// 它准入的交易，无论真实类别为何都可准入 —— 常态路径因此完全不需要分类，
+		// Resolve() 也留在原位。只有过不了 general 谓词的交易，才必须提前解析去
+		// 问「车道还能不能收它」。
+		//
+		// 两个 headroom 都单调不增，所以「现在装不下」就是「永远装不下」，Pop 掉
+		// 整个账户是正确的。绝不能因为 general headroom 耗尽就 Pop 掉 payment
+		// 交易 —— 那会把堆抽空并让车道永远填不满。
+		//
+		// resolved 非 nil ⟺ 走过了下面这段并确认了类别是 payment。它同时兼作
+		// 解析结果的缓存（LazyTransaction.Resolve() 在池未缓存该交易时不会写回
+		// ltx.Tx，重复调用会重复查池）和分类结果的缓存（Classify 要读收款账户的
+		// codeHash，是一次 state 读，不该在同一笔交易上做两次）。
+		var resolved *types.Transaction
+		if !env.laneAdmits(paymentlane.ClassGeneral, ltx.Gas) {
+			// ltx.BlobGas > 0 即 blob 交易，按 §3.1 的类型白名单恒为 general，
+			// 不必解析就能判死 —— 顺便避开 blobpool 的磁盘读。
+			if !env.laneOn || ltx.BlobGas != 0 ||
+				!env.laneAdmits(paymentlane.ClassPayment, ltx.Gas) {
+				log.Trace("Not enough gas left for transaction", "hash", ltx.Hash,
+					"left", env.gasPool.Gas(), "needed", ltx.Gas)
+				txs.Pop()
+				continue
+			}
+			if resolved = ltx.Resolve(); resolved == nil ||
+				paymentlane.Classify(resolved) != paymentlane.ClassPayment {
+				log.Trace("Only lane gas left and transaction is not payment",
+					"hash", ltx.Hash, "needed", ltx.Gas)
+				txs.Pop()
+				continue
+			}
 		}
 
 		// Most of the blob gas logic here is agnostic as to if the chain supports
@@ -914,7 +1035,10 @@ LOOP:
 		}
 
 		// Transaction seems to fit, pull it up from the pool
-		tx := ltx.Resolve()
+		tx := resolved
+		if tx == nil {
+			tx = ltx.Resolve()
+		}
 		if tx == nil {
 			log.Trace("Ignoring evicted transaction", "hash", ltx.Hash)
 			txs.Pop()
@@ -925,6 +1049,18 @@ LOOP:
 		// if inclusion of the transaction would put the block size over the
 		// maximum we allow, don't add any more txs to the payload.
 		if !env.txFitsSize(tx) {
+			// 上游在这里 break 整个循环。车道打开后这会静默饿死配额：payment
+			// 交易都是 21k gas 的小体积转账，本来装得下，却被一笔 calldata 大户
+			// 连坐。而空转配额按 §3.2 不回收、仍按 max(pu, L) 向区块收费，等于
+			// 凭一笔大交易把区块有效容量再削掉一个 L。
+			//
+			// 配额还有空间时改成丢弃该账户后继续扫。env.size 单调递增，所以
+			// 「现在装不下」就是「永远装不下」，Pop 是正确的；扫描量仍被堆大小
+			// 与 stopTimer 界住。
+			if env.laneOn && env.laneBudget.IdleLane() >= params.TxGas {
+				txs.Pop()
+				continue
+			}
 			break
 		}
 		// Error may be ignored here. The error has already been checked
@@ -938,10 +1074,28 @@ LOOP:
 			txs.Pop()
 			continue
 		}
+		// header 承诺需要精确的分类总额，所以每一笔被包含的交易都必须定类别 ——
+		// 即使上面的短路是在不知道类别的情况下准入的。
+		class := paymentlane.ClassGeneral
+		if env.laneOn {
+			if resolved != nil {
+				class = paymentlane.ClassPayment // 短路路径已确认，不重复 state 读
+			} else {
+				class = paymentlane.Classify(tx)
+			}
+			// 复检用真实交易的 gas limit：ltx.Gas 只是池里的缓存副本。
+			if !env.laneAdmits(class, tx.Gas()) {
+				log.Trace("Transaction does not fit its lane class", "hash", ltx.Hash,
+					"class", class, "needed", tx.Gas())
+				txs.Pop()
+				continue
+			}
+		}
+
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
-		_, err := w.commitTransaction(env, tx, bloomProcessors)
+		_, err := w.commitTransaction(env, tx, class, bloomProcessors)
 		switch {
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
@@ -1172,6 +1326,34 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 		}
 	}
 
+	// BEP-703 不需要单独的「车道补填轮」。配额由上面两轮直接填满，依据是
+	// commitTransactions 里的车道感知准入：general headroom 耗尽后 payment
+	// 交易仍按共享余量准入（不减 IdleLane），所以循环会一路 Pop 掉装不下的
+	// general 账户、继续把堆走到空，而不是在 general 满时收工。
+	//
+	// 曾经加过第三轮「MinTip=nil 重查池」，前提是「payment 交易因 tip 低而被
+	// filter.MinTip 挡在候选集外」。那个前提在 BSC 上不成立，三条互相独立的
+	// 理由：
+	//   (1) eth/backend.go 的 StartMining 把 miner.gasprice 推进 txpool
+	//       (txPool.SetGasTip)，而 legacypool.SetGasTip 会用 TxsBelowTip 逐出
+	//       低于新门限的交易 —— 池的准入门限与 w.tip 同源；
+	//   (2) core/txpool/validation.go 的 ErrTipAboveFeeCap 强制
+	//       GasFeeCap >= GasTipCap；
+	//   (3) eip1559.CalcBaseFee 对 IsInBSC() 恒返回 InitialBaseFeeForBSC = 0。
+	// 合起来，legacypool.Pending 的截断判据
+	// effectiveTip = min(GasTipCap, GasFeeCap-BaseFee) 退化成
+	// GasTipCap >= pool.gasTip = MinTip，永不触发 —— 重查一次拿回来的候选集与
+	// 前两轮逐字相同。
+	//
+	// 而代价是实打实的：legacypool.Pending 在 pool.mu.RLock 下为每笔交易分配一个
+	// LazyTransaction，MinTip=nil 时是整个池；这个代价还要乘上 commitWork 的重试
+	// 次数和每个 bid 的 greedy merge。更糟的是它的进入条件「配额还有空间」在
+	// 不拥堵时恒真，于是会把 MinTip 以下的 general 交易也打包进来 —— 等于悄悄把
+	// 矿工对普通流量的 tip 底线降成池门限，超出了车道的授权范围。
+	//
+	// 若将来 (1) 的耦合被解开（矿工门限严格高于池门限），才需要补一轮，且判据
+	// 应当是两个门限的精确比较，而不是「配额还有空间」。
+
 	return nil
 }
 
@@ -1244,6 +1426,10 @@ func (w *worker) generateWork(genParam *generateParams, witness bool) *newPayloa
 	}
 
 	fees := work.state.GetBalance(consensus.SystemAddress)
+	// 车道承诺必须在 AssembleBlock 之前写入 header（dev / Engine API 路径）。
+	if err := work.sealLane(); err != nil {
+		return &newPayloadResult{err: err}
+	}
 	block, receipts, err := core.AssembleBlock(w.engine, w.chain, work.header, work.state, &body, work.receipts)
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -1603,6 +1789,13 @@ func (w *worker) commit(env *environment, interval func(), start time.Time) erro
 		body := types.Body{Transactions: env.txs}
 		if env.header.EmptyWithdrawalsHash() {
 			body.Withdrawals = make([]*types.Withdrawal, 0)
+		}
+		// 在 header 被拷贝并封装之前写入车道承诺。见 sealLane 的注释：准入
+		// 逻辑正确时它不可能失败，所以这里的 return 不会造成保守性槽位损失。
+		if err := env.sealLane(); err != nil {
+			log.Error("Payment lane invariant violated while sealing, abort",
+				"number", env.header.Number, "err", err)
+			return err
 		}
 		block, receipts, err := core.AssembleBlock(w.engine, w.chain, types.CopyHeader(env.header), env.state, &body, env.receipts)
 		env.committed = true

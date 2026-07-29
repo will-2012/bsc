@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -634,8 +635,18 @@ func (p *Parlia) VerifyUnsealedHeader(chain consensus.ChainHeaderReader, header 
 		}
 	}
 
-	// Ensure that the block doesn't contain any uncles which are meaningless in PoA
-	if header.UncleHash != types.EmptyUncleHash {
+	// Ensure that the block doesn't contain any uncles which are meaningless in PoA.
+	//
+	// BEP-703 激活后 UncleHash 承载车道记账，所以「没有 uncle」改由 body 校验
+	// （VerifyUncles / ValidateBody），这里只校验承诺的编码合法性。
+	//
+	// 这道门必须加：VerifyUnsealedHeader 同时被区块导入（verifyHeader）和
+	// bid block 准入（preSealVerifyBidBlock）走，不改的话带承诺的块两边都进不去。
+	if paymentlane.Enabled(chain.Config(), header.Number, header.Time) {
+		if _, err := paymentlane.Decode(header.UncleHash); err != nil {
+			return err
+		}
+	} else if header.UncleHash != types.EmptyUncleHash {
 		return errInvalidUncleHash
 	}
 
@@ -1591,7 +1602,17 @@ func (p *Parlia) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	if header.GasLimit < header.GasUsed {
 		return nil, nil, errors.New("gas consumption of system txs exceed the gas limit")
 	}
-	header.UncleHash = types.EmptyUncleHash
+	// BEP-703：这一行原本无条件把 UncleHash 写成 EmptyUncleHash，而它的执行
+	// 时机在矿工写入车道承诺（miner 的 sealLane）之后 —— 不加门就会静默销毁
+	// 承诺，表现为「本地出块成功、全网 BAD_BLOCK」，且 ValidateBody 与
+	// VerifyHeader 都指不出原因。
+	//
+	// 车道激活后 uncle 为空由 VerifyUncles / ValidateBody 在 body 上强制
+	// （符合 BEP-696 的「MUST NOT derive the expected uncle list from
+	// UncleHash」），所以这里不再需要覆写。
+	if !paymentlane.Enabled(p.chainConfig, header.Number, header.Time) {
+		header.UncleHash = types.EmptyUncleHash
+	}
 	var blk *types.Block
 	var rootHash common.Hash
 	wg := sync.WaitGroup{}

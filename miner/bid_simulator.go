@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/consensus/parlia"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
@@ -741,6 +742,37 @@ func (b *bidSimulator) preSealVerifyBidBlock(decoded *buildertypes.DecodedBidBlo
 	if txHash := types.DeriveSha(decoded.Txs, trie.NewStackTrie(nil)); header.TxHash != txHash {
 		return fmt.Errorf("invalid tx root: got %s, want %s", header.TxHash, txHash)
 	}
+	// BEP-703：validator 在导入之前就签名并广播 bid block（mux.Post 发生在
+	// InsertChain 之前，见 miner/bid_block.go），而这里的准入本来全是静态检查，
+	// 所以车道违规只会在块已经上线之后暴露 —— validator 丢一个槽位，builder
+	// 只是被 revoke，等于零成本让指定 validator 丢槽。
+	//
+	// 记账承诺进 header 之后，规则在这里退化为纯算术，可以在签名前拒掉。
+	//
+	// 注意这里只能证明「承诺自洽且满足不等式」，不能证明「承诺真实」——
+	// 真实性需要执行，由事后 InsertChain 的校验兜底 + builder revoke 惩罚。
+	// 这个组合已经够：作恶者再也无法让 validator 丢槽，最多是自己被拒并 revoke。
+	if paymentlane.Enabled(b.chainConfig, header.Number, header.Time) {
+		commitment, err := paymentlane.Decode(header.UncleHash)
+		if err != nil {
+			return err
+		}
+		// 两个桶是 builder 完全可控的 uint64，反推 systemGasUsed 的减法必须防
+		// 溢出，否则 general=2^64-1 / payment=1 这一对会绕过全部检查。
+		systemGasUsed, err := paymentlane.DeriveSystemGas(header.GasUsed,
+			commitment.GeneralGasUsed, commitment.PaymentGasUsed)
+		if err != nil {
+			return err
+		}
+		laneSize := paymentlane.Quota(parent, header)
+		if commitment.LaneSize != laneSize {
+			return paymentlane.ErrQuotaMismatch
+		}
+		if err := paymentlane.CheckInequality(header.GasLimit, systemGasUsed,
+			commitment.GeneralGasUsed, commitment.PaymentGasUsed, laneSize); err != nil {
+			return err
+		}
+	}
 
 	decoded.SystemTxStart, decoded.GasFee = parliaEngine.ExtractBidBlockDepositValue(decoded.Txs)
 
@@ -1069,6 +1101,21 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 		err = errors.New("gas used exceeds gas limit")
 		return
 	}
+	// BEP-703：这里**没有**可靠的类别感知早期检查，原因值得写下来。
+	//
+	// bid.GasUsed 是 builder 自报的总量标量，没有类别拆分。想在模拟前判死一个
+	// bid，只能证明它必然不可行。而由 gu+max(pu,L) >= max(gu+pu, L) 得下界是
+	// max(bid.GasUsed, L)，两项分别已被上面的总量检查和 makeEnv 的配额钳制
+	// 覆盖 —— 所以在拿到类别拆分之前，不存在额外的可靠拒收条件。
+	//
+	// 曾经试过用「general 交易 gas 上限之和」做保守上界，那是错的：BSC 上
+	// gas limit 普遍远高于实际消耗，会误杀大量合法 bid。
+	//
+	// 代价是一个「总量合法但 general 部分超限」的 bid 只能在下面的逐笔循环里
+	// 失败，白烧掉整个模拟窗口，且报错是笼统的 "invalid tx in bid"，builder
+	// 无从自适应。要修必须走协议面：RawBid 增加 GeneralGasUsed 字段（进 bid
+	// hash，属签名格式的破坏性变更，需 MevParams.Version 版本协商），并让
+	// mev_params 暴露 laneSize 供 builder 自己算。
 
 	if len(b.bidsToSim[bidRuntime.bid.BlockNumber]) == 1 {
 		bidSim1stBidTimer.UpdateSince(time.UnixMilli(int64(b.chain.GetHeaderByHash(bidRuntime.bid.ParentHash).MilliTimestamp())))
@@ -1199,7 +1246,10 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 
 	// commit payBidTx at the end of the block
 	bidRuntime.env.gasPool.AddGas(params.PayBidTxGasLimit)
-	err = bidRuntime.commitTransaction(b.chain, b.chainConfig, payBidTx, true)
+	// payBidTx 是 builder 打给 validator EOA 的纯转账、calldata 为空，按 §3.1
+	// 类别① 的机械判据会被判成 payment —— 等于让 MEV 回扣搭上了「保障普通
+	// 转账」这条车道。这里强制归 general，而不是指望分类器去特判它。
+	err = bidRuntime.commitTransactionAs(b.chain, b.chainConfig, payBidTx, true, paymentlane.ClassGeneral)
 	if err != nil {
 		log.Error("BidSimulator: failed to commit tx", "builder", bidRuntime.bid.Builder,
 			"bidHash", bidRuntime.bid.Hash(), "tx", payBidTx.Hash(), "err", err)
@@ -1326,6 +1376,12 @@ func (r *BidRuntime) packReward(validatorCommission uint64) {
 }
 
 func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *params.ChainConfig, tx *types.Transaction, unRevertible bool) error {
+	return r.commitTransactionAs(chain, chainConfig, tx, unRevertible, r.env.laneClassOf(tx))
+}
+
+// commitTransactionAs 是 commitTransaction 的变体，车道类别由调用方钉死。
+// 用于矿工自己合成的交易 —— 对它们来说「按收款地址分类」会给出错误答案。
+func (r *BidRuntime) commitTransactionAs(chain *core.BlockChain, chainConfig *params.ChainConfig, tx *types.Transaction, unRevertible bool, class paymentlane.Class) error {
 	var (
 		env = r.env
 		sc  *types.BlobSidecar
@@ -1374,10 +1430,23 @@ func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *para
 		}
 	}
 
+	// BEP-703：bid 的交易集由 builder 给定，顺序固定、不可跳过，所以一笔装不下
+	// 自己类别预算的交易会让整个 bid 失败，而不是像本地打包那样被跳过。
+	if env.laneOn && !env.laneAdmits(class, tx.Gas()) {
+		return paymentlane.ErrViolated
+	}
+	usedBefore := env.gasPool.Used()
+
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, core.NewReceiptBloomGenerator())
 	if err != nil {
+		// 这里没有 gasPool 回滚（与 worker.applyTransaction 不同）：失败即整个
+		// bid 作废、env 被丢弃，所以桶与池的不一致不会被观察到。
 		return err
-	} else if unRevertible && receipt.Status == types.ReceiptStatusFailed {
+	}
+	// 记账放在 unRevertible 检查之前：那条检查失败时 ApplyTransaction 已经成功、
+	// 池已经推进，若先返回就会留下 桶之和 != gasPool.Used() 的局部破裂状态。
+	env.accountLane(class, usedBefore)
+	if unRevertible && receipt.Status == types.ReceiptStatusFailed {
 		return errors.New("no revertible transaction failed")
 	}
 	env.header.GasUsed = env.gasPool.Used()

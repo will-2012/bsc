@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
@@ -64,8 +65,14 @@ func (v *BlockValidator) ValidateBody(block *types.Block) error {
 	if err := v.bc.engine.VerifyUncles(v.bc, block); err != nil {
 		return err
 	}
-	if hash := types.CalcUncleHash(block.Uncles()); hash != header.UncleHash {
-		return fmt.Errorf("uncle root hash mismatch (header value %x, calculated %x)", header.UncleHash, hash)
+	// BEP-703 激活后 UncleHash 承载车道记账，不再是 uncle 列表的哈希。
+	// 「uncle 必须为空」已由上面的 engine.VerifyUncles 独立强制（Parlia 检查
+	// len(block.Uncles()) > 0），所以这条哈希相等检查在激活后必须跳过 ——
+	// 不跳的话每个带承诺的块都会在 ValidateBody 里被判 BAD_BLOCK。
+	if !paymentlane.Enabled(v.config, block.Number(), block.Time()) {
+		if hash := types.CalcUncleHash(block.Uncles()); hash != header.UncleHash {
+			return fmt.Errorf("uncle root hash mismatch (header value %x, calculated %x)", header.UncleHash, hash)
+		}
 	}
 
 	validateFuns := []func() error{

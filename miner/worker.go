@@ -154,10 +154,11 @@ type environment struct {
 //
 // 共享余量取 gasPool.Gas() 而不是自己重算，这样 bid 路径上
 // SubGas(PayBidTxGasLimit) 那 25000 的临时预留天然被尊重。
+//
+// 车道关闭时 laneBudget 是零值 ⇒ IdleLane 为 0 ⇒ 两类的 headroom 都等于共享
+// 余量，谓词退化成上游的 `gasPool.Gas() < tx.Gas()`。零回归是零值给的，不需要
+// 特判。
 func (env *environment) laneAdmits(class paymentlane.Class, gasLimit uint64) bool {
-	if !env.laneOn {
-		return gasLimit <= env.gasPool.Gas()
-	}
 	return env.laneBudget.Admits(env.gasPool.Gas(), class, gasLimit)
 }
 
@@ -978,45 +979,6 @@ LOOP:
 			break
 		}
 
-		// If we don't have enough space for the next transaction, skip the account.
-		//
-		// general 谓词是两者中更严的那个（它多减一个非负的 IdleLane），所以凡是
-		// 它准入的交易，无论真实类别为何都可准入 —— 常态路径因此完全不需要分类，
-		// Resolve() 也留在原位。只有过不了 general 谓词的交易，才必须提前解析去
-		// 问「车道还能不能收它」。
-		//
-		// 两个 headroom 都单调不增，所以「现在装不下」就是「永远装不下」，Pop 掉
-		// 整个账户是正确的。绝不能因为 general headroom 耗尽就 Pop 掉 payment
-		// 交易 —— 那会把堆抽空并让车道永远填不满。
-		//
-		// laneConfirmed 记下「车道短路已经确认这笔是 payment」，供下面的权威分类
-		// 复用 —— Classify 按 §3.1 要读收款账户的 codeHash，是一次 state 读，
-		// 不该在同一笔交易上做两次。
-		//
-		// 只缓存分类结论、不缓存解析结果：重复 Resolve 的代价只是一次带锁的
-		// map 查询（legacypool.Get -> lookup.Get），不值得为它改动下面那行上游
-		// 代码；而 blob 交易在上面就被判死了，blobpool 的磁盘读走不到这里。
-		var laneConfirmed bool
-		if !env.laneAdmits(paymentlane.ClassGeneral, ltx.Gas) {
-			// ltx.BlobGas > 0 即 blob 交易，按 §3.1 的类型白名单恒为 general，
-			// 不必解析就能判死 —— 顺便避开 blobpool 的磁盘读。
-			if !env.laneOn || ltx.BlobGas != 0 ||
-				!env.laneAdmits(paymentlane.ClassPayment, ltx.Gas) {
-				log.Trace("Not enough gas left for transaction", "hash", ltx.Hash,
-					"left", env.gasPool.Gas(), "needed", ltx.Gas)
-				txs.Pop()
-				continue
-			}
-			probe := ltx.Resolve()
-			if probe == nil || paymentlane.Classify(probe) != paymentlane.ClassPayment {
-				log.Trace("Only lane gas left and transaction is not payment",
-					"hash", ltx.Hash, "needed", ltx.Gas)
-				txs.Pop()
-				continue
-			}
-			laneConfirmed = true
-		}
-
 		// Most of the blob gas logic here is agnostic as to if the chain supports
 		// blobs or not, however the max check panics when called on a chain without
 		// a defined schedule, so we need to verify it's safe to call.
@@ -1037,6 +999,20 @@ LOOP:
 			continue
 		}
 		prefetchCurr.Store(tx)
+
+		// If we don't have enough space for the next transaction, skip the account.
+		//
+		// 判断要先知道类别（两类的可用空间不同），而类别要看 To/data/tx type ——
+		// LazyTransaction 上没有，所以上游那句 gasPool.Gas() < ltx.Gas 挪到了
+		// Resolve 之后。Pop 掉整个账户的正确性见 paymentlane.Budget.Headroom：
+		// 两类的 headroom 都单调不增，「现在装不下」就是「永远装不下」。
+		class := env.laneClassOf(tx)
+		if !env.laneAdmits(class, tx.Gas()) {
+			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash,
+				"class", class, "left", env.gasPool.Gas(), "needed", tx.Gas())
+			txs.Pop()
+			continue
+		}
 
 		// if inclusion of the transaction would put the block size over the
 		// maximum we allow, don't add any more txs to the payload.
@@ -1066,24 +1042,6 @@ LOOP:
 			txs.Pop()
 			continue
 		}
-		// header 承诺需要精确的分类总额，所以每一笔被包含的交易都必须定类别 ——
-		// 即使上面的短路是在不知道类别的情况下准入的。
-		class := paymentlane.ClassGeneral
-		if env.laneOn {
-			if laneConfirmed {
-				class = paymentlane.ClassPayment // 短路路径已确认，不重复 state 读
-			} else {
-				class = paymentlane.Classify(tx)
-			}
-			// 复检用真实交易的 gas limit：ltx.Gas 只是池里的缓存副本。
-			if !env.laneAdmits(class, tx.Gas()) {
-				log.Trace("Transaction does not fit its lane class", "hash", ltx.Hash,
-					"class", class, "needed", tx.Gas())
-				txs.Pop()
-				continue
-			}
-		}
-
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 

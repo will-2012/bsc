@@ -989,11 +989,14 @@ LOOP:
 		// 整个账户是正确的。绝不能因为 general headroom 耗尽就 Pop 掉 payment
 		// 交易 —— 那会把堆抽空并让车道永远填不满。
 		//
-		// resolved 非 nil ⟺ 走过了下面这段并确认了类别是 payment。它同时兼作
-		// 解析结果的缓存（LazyTransaction.Resolve() 在池未缓存该交易时不会写回
-		// ltx.Tx，重复调用会重复查池）和分类结果的缓存（Classify 要读收款账户的
-		// codeHash，是一次 state 读，不该在同一笔交易上做两次）。
-		var resolved *types.Transaction
+		// laneConfirmed 记下「车道短路已经确认这笔是 payment」，供下面的权威分类
+		// 复用 —— Classify 按 §3.1 要读收款账户的 codeHash，是一次 state 读，
+		// 不该在同一笔交易上做两次。
+		//
+		// 只缓存分类结论、不缓存解析结果：重复 Resolve 的代价只是一次带锁的
+		// map 查询（legacypool.Get -> lookup.Get），不值得为它改动下面那行上游
+		// 代码；而 blob 交易在上面就被判死了，blobpool 的磁盘读走不到这里。
+		var laneConfirmed bool
 		if !env.laneAdmits(paymentlane.ClassGeneral, ltx.Gas) {
 			// ltx.BlobGas > 0 即 blob 交易，按 §3.1 的类型白名单恒为 general，
 			// 不必解析就能判死 —— 顺便避开 blobpool 的磁盘读。
@@ -1004,13 +1007,14 @@ LOOP:
 				txs.Pop()
 				continue
 			}
-			if resolved = ltx.Resolve(); resolved == nil ||
-				paymentlane.Classify(resolved) != paymentlane.ClassPayment {
+			probe := ltx.Resolve()
+			if probe == nil || paymentlane.Classify(probe) != paymentlane.ClassPayment {
 				log.Trace("Only lane gas left and transaction is not payment",
 					"hash", ltx.Hash, "needed", ltx.Gas)
 				txs.Pop()
 				continue
 			}
+			laneConfirmed = true
 		}
 
 		// Most of the blob gas logic here is agnostic as to if the chain supports
@@ -1026,10 +1030,7 @@ LOOP:
 		}
 
 		// Transaction seems to fit, pull it up from the pool
-		tx := resolved
-		if tx == nil {
-			tx = ltx.Resolve()
-		}
+		tx := ltx.Resolve()
 		if tx == nil {
 			log.Trace("Ignoring evicted transaction", "hash", ltx.Hash)
 			txs.Pop()
@@ -1069,7 +1070,7 @@ LOOP:
 		// 即使上面的短路是在不知道类别的情况下准入的。
 		class := paymentlane.ClassGeneral
 		if env.laneOn {
-			if resolved != nil {
+			if laneConfirmed {
 				class = paymentlane.ClassPayment // 短路路径已确认，不重复 state 读
 			} else {
 				class = paymentlane.Classify(tx)

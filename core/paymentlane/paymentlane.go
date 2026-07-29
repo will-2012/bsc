@@ -256,6 +256,24 @@ type Budget struct {
 
 // IdleLane 是配额中尚未被 payment 流量填掉的部分。general 交易必须让出它，
 // payment 交易不必。
+//
+// 它的物理意义由这条恒等式给出（对任意无符号 p、L 成立）：
+//
+//	max(paymentUsed, laneSize) ≡ paymentUsed + IdleLane
+//
+// 代进 §3.2 的不等式，规则就是
+//
+//	system + general + payment + IdleLane <= GasLimit
+//
+// 也就是说 IdleLane 是一笔虚拟交易的 gas 消耗：它像真交易一样占据区块空间、
+// 参与容量竞争，却不产生任何手续费，存在的唯一目的是替还没到来的支付流量把门
+// 顶住。BEP 里的 max() 只是这件事的另一种写法，而 Headroom 里的减法就是让
+// general 交易和这笔虚拟交易挤在同一个块里。
+//
+// 打包过程中它是「预留此刻还剩多少约束力」：每来一笔 payment 交易真正花掉车道
+// 里的 gas，被扣着的量就一对一缩小 —— 那部分已从「为支付预留」变成「被支付
+// 用掉」。封块时它是这个块浪费掉的容量上界（§3.2 明定未用配额空转不回收），
+// 说上界是因为只有确实有 general 交易在等这块空间时损失才真实发生。
 func (b Budget) IdleLane() uint64 { return satSub(b.LaneSize, b.PaymentUsed) }
 
 // Headroom 返回某类别交易当前允许的最大 gas 上限。shared 是共享余量，出块侧

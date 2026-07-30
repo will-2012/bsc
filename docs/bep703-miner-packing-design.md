@@ -96,8 +96,7 @@ Parlia 不允许 uncle，该字段恒为 `EmptyUncleHash`、从不被读取。BE
 | `miner/worker.go:1030-1034` | 记账：循环里取快照、`commitTransaction` 返回后差分 |
 | `miner/worker.go:1345`、`:1711` | 两条 assemble 路径在 `AssembleBlock` 之前调 `sealLane` |
 | `miner/bid_simulator.go:755-775` | bid block 签名前的静态门 |
-| `miner/bid_simulator.go:1429-1444` | bid 逐笔准入 + 记账 |
-| `miner/bid_simulator.go:1242` | payBidTx 强制归 general |
+| `miner/bid_simulator.go:1425-1447` | bid 逐笔分类 + 准入 + 记账 |
 | `consensus/parlia/parlia.go:645` | `VerifyUnsealedHeader` 的 uncle gate |
 | `consensus/parlia/parlia.go:1613` | `finalizeAndAssemble` 不再覆写 `UncleHash` |
 | `core/block_validator.go:72` | `ValidateBody` 的 `CalcUncleHash` 相等检查加门 |
@@ -201,7 +200,7 @@ bid 场景下交易集顺序由 builder 给定、不可重排，这个差别直�
 | 快照取早了 | bid 路径 `SubGas(PayBidTxGasLimit)` 的 25000 被算成某一笔的消耗，承诺虚高 | 快照紧贴 `commitTransaction`；中间不得插入动 `gasPool` 的代码 |
 | bid 侧漏掉逐笔准入 | 一笔 gas 落在 `(shared−IdleLane, shared]` 的 general 交易会被 `ApplyTransaction` 正常执行并计入 general 桶，直到 `sealLane` 才发现越界 —— 那时整个块（不只这个 bid）都要放弃 | `bid_simulator.go:1429` 的检查 |
 | bid block 只靠事后 `InsertChain` 拦 | `mux.Post` 在 `InsertChain` 之前，validator 已签名广播 → 零成本让指定 validator 丢槽 | `bid_simulator.go:755` 的签名前静态门 |
-| payBidTx 被判成 payment | MEV 回扣搭上「保障普通转账」的车道 | `bid_simulator.go:1242` 强制 general |
+| 在客户端按交易用途特判类别（例如把 payBidTx 归 general） | 验证方按机械判据得到不同类别 ⇒ 两侧的桶不一致 ⇒ BAD_BLOCK，而日志无指向 | 类别一律交给 `Classify`；要排除某类交易只能改 BEP §3.1，且判据必须两侧都能求值 |
 | 承诺桶用朴素加减法 | `general=2^64-1 / payment=1` 绕回小数值 → 通过检查 → bid block 静态门整个废掉 | `CheckInequality` 与 `DeriveSystemGas` 用 `bits.Add64` |
 
 ---
@@ -239,7 +238,18 @@ bid 场景下交易集顺序由 builder 给定、不可重排，这个差别直�
 - **`UncleHash` 复用还需放开的地方**（都在打包流程之外，不改则块无法传播/同步）：`eth/protocols/eth/handlers.go` 的 `handleNewBlock` 会静默丢弃广播来的块；`eth/fetcher/block_fetcher.go` 的 body 永远配不上 header；`eth/downloader/queue.go` 每块 `errInvalidBody` 并掉 peer。
 - **三个 mock 接缝的真实实现**：`Enabled`（`params.ChainConfig` 的新分叉门，约 14 处挂载）、`Classify`（§3.1，含 tx type 白名单与预编译排除）、`Quota`（§3.3/§3.4，含四条不变量校验与治理参数读取）。
 - **可观测性**：空转配额是 §3.2 明定不回收的真实吞吐损失，代码里没有任何指标暴露它。至少需要 `laneSize` / `paymentUsed` / `IdleLane` 三个 Gauge（**必须是 Gauge 而非 ResettingTimer**——后者在开了 `--metrics` 而无 scraper 时会无界增长）。
-- **BEP 文本待确认**：递推跑在 gas 空间而非 ratio 空间（§4.3）。
+- **BEP 文本待确认（一）**：递推跑在 gas 空间而非 ratio 空间（§4.3）。
+- **BEP 文本待确认（二）：payBidTx 目前会被判成 payment。** 它是 `BidArgs.PayBidTx`
+  里由投标方提供的普通外部签名交易（sentry → builder 的纯转账、`data` 为空），被追加
+  到 bid 交易列表末尾。它不满足 `IsSystemTransaction`（`to` 不是系统合约），在验证方
+  眼里就是一笔普通交易，**没有任何结构标记可供识别** —— 所以按 §3.1 类别① 的机械
+  判据它是 payment，MEV 回扣因此搭上了「保障普通转账」的车道。
+  量级很小（`PayBidTxGasLimit = 25000`，约配额的 0.3%~0.9%），但方向是错的。
+  **客户端不能单方面把它归 general**：矿工归 general、验证方算成 payment，两侧的桶
+  就不一致，直接 BAD_BLOCK。要排除只能改 BEP §3.1，并给出两侧都能求值的判据
+  （例如「区块内最后一笔非系统交易且收款方为 coinbase」—— 但那很脆弱）。
+  对照：Parlia 系统交易的排除是结构性的，两侧共用 `IsSystemTransaction`，所以不存在
+  这个问题。
 - **`txFitsSize` 的 `break` 会成为配额空转来源 —— 但只在 `GasLimit > 73.9M` 之后。**
   上游在区块撞到体积上限时 `break` 整个循环，于是本来装得下的小体积 payment 交易
   也进不来。曾经加过一个「配额还有空间时改成 `Pop` + `continue`」的分支，后来删掉，

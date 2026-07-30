@@ -1236,10 +1236,7 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 
 	// commit payBidTx at the end of the block
 	bidRuntime.env.gasPool.AddGas(params.PayBidTxGasLimit)
-	// payBidTx 是 builder 打给 validator EOA 的纯转账、calldata 为空，按 §3.1
-	// 类别① 的机械判据会被判成 payment —— 等于让 MEV 回扣搭上了「保障普通
-	// 转账」这条车道。这里强制归 general，而不是指望分类器去特判它。
-	err = bidRuntime.commitTransactionAs(b.chain, b.chainConfig, payBidTx, true, paymentlane.ClassGeneral)
+	err = bidRuntime.commitTransaction(b.chain, b.chainConfig, payBidTx, true)
 	if err != nil {
 		log.Error("BidSimulator: failed to commit tx", "builder", bidRuntime.bid.Builder,
 			"bidHash", bidRuntime.bid.Hash(), "tx", payBidTx.Hash(), "err", err)
@@ -1366,12 +1363,6 @@ func (r *BidRuntime) packReward(validatorCommission uint64) {
 }
 
 func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *params.ChainConfig, tx *types.Transaction, unRevertible bool) error {
-	return r.commitTransactionAs(chain, chainConfig, tx, unRevertible, r.env.laneClassOf(tx))
-}
-
-// commitTransactionAs 是 commitTransaction 的变体，车道类别由调用方钉死。
-// 用于矿工自己合成的交易 —— 对它们来说「按收款地址分类」会给出错误答案。
-func (r *BidRuntime) commitTransactionAs(chain *core.BlockChain, chainConfig *params.ChainConfig, tx *types.Transaction, unRevertible bool, class paymentlane.Class) error {
 	var (
 		env = r.env
 		sc  *types.BlobSidecar
@@ -1420,12 +1411,21 @@ func (r *BidRuntime) commitTransactionAs(chain *core.BlockChain, chainConfig *pa
 		}
 	}
 
-	// BEP-703：这道检查不能省。gasPool 只知道共享余量，所以一笔 gas 落在
+	// BEP-703：类别一律由分类器决定，绝不能在这里按交易的用途特判。
+	//
+	// 典型的诱惑是 payBidTx —— 它是 sentry 打给 builder 的纯转账、data 为空，按
+	// §3.1 类别① 会被判成 payment，于是 MEV 回扣搭上了「保障普通转账」的车道
+	// （25000 gas，约配额的 0.3%~0.9%）。但验证方在导入时只看得到一笔普通交易，
+	// 它不满足 IsSystemTransaction、也没有任何结构标记可供识别；矿工这边把它归
+	// general，验证方按机械判据算成 payment，两侧的桶就不一致 —— 直接 BAD_BLOCK。
+	// 要排除它只能改 BEP §3.1，且必须给出两侧都能求值的判据。
+	//
+	// 这道准入检查不能省：gasPool 只知道共享余量，所以一笔 gas 落在
 	// (shared-IdleLane, shared] 区间的 general 交易会被 ApplyTransaction 正常执行
 	// 并计入 general 桶，直到 sealLane 才发现越界 —— 那时整个块（不只是这个 bid）
 	// 都得放弃。在这里拦掉，最坏只是这个 bid 被拒、回退本地打包。
-	//
 	// bid 的交易集由 builder 给定、顺序固定不可跳过，所以拦到就是整个 bid 失败。
+	class := env.laneClassOf(tx)
 	if env.laneOn && !env.laneAdmits(class, tx.Gas()) {
 		return paymentlane.ErrViolated
 	}

@@ -393,7 +393,7 @@ lane 不等式是执行后规则，不执行拿不到 `paymentGasUsed`。⇒ **�
 | 1.4 | M | 类别① 限定 tx type 白名单 `{0x00, 0x01, 0x02}`；显式排除 `BlobTxType`、`SetCodeTxType`；未来新增类型默认不进 lane（M2-b/c） |
 | 1.5 | M | 类别① 要求 `len(accessList) == 0`（M2-d） |
 | 1.6 | M | 类别① 排除当前分叉激活的所有预编译地址（含 BSC 自有 `0x64`–`0x69`）（M2-a） |
-| 1.7 | M | 显式规定 Parlia 系统交易与 MEV payBidTx **不属于** payment 类（M9-b） |
+| 1.7 | M | 显式规定 Parlia 系统交易与 MEV payBidTx **不属于** payment 类（M9-b）。注意两者性质不同：系统交易的排除已是结构性的（两侧共用 `IsSystemTransaction`），而 payBidTx 是投标方提供的普通外部签名交易，验证方**没有任何结构标记可识别它** —— 所以规格必须给出两侧都能求值的判据，客户端不能单方面归类，否则两侧的桶不一致直接 BAD_BLOCK |
 | 1.8 | S | 类别① 要求 `value > 0` |
 | 1.9 | S | 禁止把系统合约地址与预编译地址列入 ②/③ |
 | 1.10 | S | 修正 §4「category ① admits no code execution at all」→「不执行 state 中的 bytecode」 |

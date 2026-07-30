@@ -62,11 +62,12 @@ const (
 )
 
 var (
-	ErrViolated       = errors.New("payment lane inequality violated")
-	ErrBucketMismatch = errors.New("payment lane buckets do not sum to gas used")
-	ErrBucketOverflow = errors.New("payment lane buckets exceed header gas used")
-	ErrQuotaMismatch  = errors.New("payment lane quota does not match parent derivation")
-	ErrBadCommitment  = errors.New("payment lane commitment is malformed")
+	ErrViolated           = errors.New("payment lane inequality violated")
+	ErrBucketMismatch     = errors.New("payment lane buckets do not sum to gas used")
+	ErrBucketOverflow     = errors.New("payment lane buckets exceed header gas used")
+	ErrQuotaMismatch      = errors.New("payment lane quota does not match parent derivation")
+	ErrBadCommitment      = errors.New("payment lane commitment is malformed")
+	ErrCommitmentUntruthy = errors.New("payment lane commitment does not match replayed buckets")
 )
 
 // ---------------------------------------------------------------------------
@@ -344,6 +345,33 @@ func (b Budget) Verify(gasLimit, systemGasUsed, poolUsed uint64) error {
 			ErrBucketMismatch, b.PaymentUsed, b.GeneralUsed, poolUsed)
 	}
 	return CheckInequality(gasLimit, systemGasUsed, b.GeneralUsed, b.PaymentUsed, b.LaneSize)
+}
+
+// VerifyCommitment 是导入侧的校验，也是整套规则**唯一的权威强制点**。
+//
+// 出块侧的 Verify 只能自证：矿工用自己算的桶对自己的承诺，作恶者换一组自洽的
+// 假数就能通过（bid block 准入门同理，见 miner/bid_simulator.go）。这里的桶是
+// 本地重放执行得出的，与 header 承诺逐字比对之后，说谎的块拿不到 canonical
+// 地位 —— 这条检查一旦缺失，「验证块符合规则」就完全不成立，无论出块侧写得
+// 多严密。
+//
+// 参数口径必须与出块侧同源，否则诚实的块会被拒：
+//
+//	poolUsed      = gp.Used()，只含用户交易；两侧都用同一个 GasPool 类型的
+//	                同一个方法，池的初值不同（矿工扣了 gasReserved）但差分相消。
+//	systemGasUsed = Finalize 之后的 header.GasUsed 减去上面那个 poolUsed，
+//	                因为 Parlia 系统交易不走 gasPool、由 Finalize 直接累加。
+//	                导入侧拿到的是**真实值**，不需要 DeriveSystemGas 那个从
+//	                builder 可控字节反推的减法。
+//
+// 不比较 LaneSize：它是 header 字段，真实性由 parlia.verifyCascadingFields 对
+// Quota(parent, header) 核，而 Process 从不重复校验任何 header 字段。
+func (b Budget) VerifyCommitment(gasLimit, systemGasUsed, poolUsed uint64, c Commitment) error {
+	if b.GeneralUsed != c.GeneralGasUsed || b.PaymentUsed != c.PaymentGasUsed {
+		return fmt.Errorf("%w: committed general %d payment %d, replayed general %d payment %d",
+			ErrCommitmentUntruthy, c.GeneralGasUsed, c.PaymentGasUsed, b.GeneralUsed, b.PaymentUsed)
+	}
+	return b.Verify(gasLimit, systemGasUsed, poolUsed)
 }
 
 // satSub 是饱和减法；车道算术全是无符号的。

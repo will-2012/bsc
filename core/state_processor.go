@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -121,6 +122,22 @@ func (p *StateProcessor) Process(ctx context.Context, block *types.Block, stated
 	// initialise bloom processors
 	bloomProcessors := NewAsyncReceiptBloomGenerator(txNum)
 
+	// BEP-703：车道规则是执行后规则，只有在这里重放才能得到真实的两个桶。承诺
+	// 一旦解不开就直接拒块 —— 激活后每个块都必须带承诺。
+	laneOn := paymentlane.Enabled(config, blockNumber, block.Time())
+	var (
+		laneCommit paymentlane.Commitment
+		laneBudget paymentlane.Budget
+	)
+	if laneOn {
+		laneCommit, err = paymentlane.Decode(header.UncleHash)
+		if err != nil {
+			bloomProcessors.Close()
+			return nil, err
+		}
+		laneBudget.LaneSize = laneCommit.LaneSize
+	}
+
 	// usually do have two tx, one for validator set contract, another for system reward contract.
 	systemTxs := make([]*types.Transaction, 0, 2)
 
@@ -153,11 +170,22 @@ func (p *StateProcessor) Process(ctx context.Context, block *types.Block, stated
 			telemetry.Int64Attribute("tx.index", int64(i)),
 		)
 
+		// 分类必须在执行之前定下来（真实实现要读父块末态，不能读正在推进的
+		// statedb），记账用 gasPool 差分，与出块侧同一口径。
+		class := paymentlane.ClassGeneral
+		if laneOn {
+			class = paymentlane.Classify(tx)
+		}
+		usedBefore := gp.Used()
+
 		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, context.Time, tx, evm, bloomProcessors)
 		if err != nil {
 			bloomProcessors.Close()
 			spanEnd(&err)
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		if laneOn {
+			laneBudget.Account(class, gp.Used()-usedBefore)
 		}
 		commonTxs = append(commonTxs, tx)
 		receipts = append(receipts, receipt)
@@ -180,6 +208,13 @@ func (p *StateProcessor) Process(ctx context.Context, block *types.Block, stated
 	err = p.chain.Engine().Finalize(p.chain, header, tracingStateDB, &commonTxs, block.Uncles(), block.Withdrawals(), &receipts, &systemTxs, &gasUsed, cfg.Tracer)
 	if err != nil {
 		return nil, err
+	}
+	if laneOn {
+		// Finalize 把系统交易的 gas 直接加到局部变量 gasUsed 上、不碰 gp，所以
+		// gp.Used() 此刻仍是用户交易口径，两者之差就是真实的 systemGasUsed。
+		if err := laneBudget.VerifyCommitment(header.GasLimit, gasUsed-gp.Used(), gp.Used(), laneCommit); err != nil {
+			return nil, err
+		}
 	}
 	// Add the system-tx logs appended by Finalize.
 	for _, receipt := range receipts[numUserReceipts:] {

@@ -742,23 +742,21 @@ func (b *bidSimulator) preSealVerifyBidBlock(decoded *buildertypes.DecodedBidBlo
 	if txHash := types.DeriveSha(decoded.Txs, trie.NewStackTrie(nil)); header.TxHash != txHash {
 		return fmt.Errorf("invalid tx root: got %s, want %s", header.TxHash, txHash)
 	}
-	// BEP-703：validator 在导入之前就签名并广播 bid block（mux.Post 发生在
-	// InsertChain 之前，见 miner/bid_block.go），而这里的准入本来全是静态检查，
-	// 所以车道违规只会在块已经上线之后暴露 —— validator 丢一个槽位，builder
-	// 只是被 revoke，等于零成本让指定 validator 丢槽。
+	// BEP-703：责任划分是「builder 负责把承诺算对，validator 负责校验」。校验的
+	// 权威点在导入侧（core/state_processor.go 重放执行后比对两个桶）；这里是签名
+	// 前的**廉价预筛**，因为 validator 在 InsertChain 之前就 mux.Post 广播了
+	// （见 miner/bid_block.go），静态检查能拦一笔算一笔。
 	//
-	// 这道门只挡得住「承诺畸形 / 桶溢出 / 不等式自身不成立」这一类，**挡不住
-	// 承诺说谎**，而说谎恰好是唯一有收益的作恶方式：builder 只要声称
-	// PaymentGasUsed == laneSize，max(payment, laneSize) 就塌缩成 laneSize，
-	// 不等式左边恒等于 header.GasUsed，而 GasUsed <= GasLimit 已由
-	// VerifyUnsealedHeader 保证 —— 于是车道被完全绕开且必然通过本门。
+	// 这道门能拦的：承诺畸形、桶溢出、不等式自身不成立 —— 也就是「builder 算错
+	// 了」这一类。拦不住的是**说谎**：builder 只要声称 PaymentGasUsed ==
+	// laneSize，max(payment, laneSize) 就塌缩成 laneSize，不等式左边恒等于
+	// header.GasUsed，而 GasUsed <= GasLimit 已由 VerifyUnsealedHeader 保证，
+	// 于是必然通过本门。真实性需要执行，签名前无法判定。
 	//
-	// 真实性需要执行，只能由事后 InsertChain 兜底；而 mux.Post 在 InsertChain
-	// 之前，所以「零成本让指定 validator 丢槽」这条攻击面**没有被关闭**，只是
-	// 门槛从「随便乱填」提到了「填一组自洽的假数」。车道让这条既有攻击面（Root /
-	// ReceiptHash / GasUsed 同样只靠 InsertChain 兜底）第一次变得**有利可图**：
-	// 绕开配额能多打 laneSize 的 general gas ⇒ GasFee 更高 ⇒ 赢过诚实 bid。
-	// 待决方案见 docs/bep703-miner-packing-design.md。
+	// 但说谎者拿不到好处：块进不了 canonical 链（导入侧拒），拿不到出块奖励，还
+	// 会被 revoke。剩下的只是「让这个 validator 丢一个槽位」的纯捣乱，而这与
+	// Root / ReceiptHash / Bloom / GasUsed 同属一类 —— 它们同样只靠事后
+	// InsertChain 兜底，是 BEP-675 拓扑固有的既存面，车道只是多加一个字段。
 	//
 	// laneSize 的校验已前移到 parlia.verifyCascadingFields（纯 header 函数，
 	// VerifyUnsealedHeader 在上面已经调过），这里不再重复。

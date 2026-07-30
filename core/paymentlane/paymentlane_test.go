@@ -400,6 +400,51 @@ func TestVerifyFailureTriggers(t *testing.T) {
 	}
 }
 
+// TestVerifyCommitmentCatchesTheLie 钉住导入侧那条**唯一权威**的检查。
+//
+// 场景取自 bid block 拓扑里唯一有意义的作恶方式：builder 声称
+// PaymentGasUsed == laneSize，让 max() 塌缩，于是签名前的静态门恒过（左边等于
+// header.GasUsed，而它 <= GasLimit 已由 header 校验保证）。只有重放执行算出的
+// 真实桶才能揭穿它 —— 这条 case 若失败，说谎的块就能进 canonical 链。
+func TestVerifyCommitmentCatchesTheLie(t *testing.T) {
+	const (
+		gasLimit  = 100
+		system    = 1
+		laneSize  = 10
+		trueGen   = 89 // 全是 general，一笔 payment 都没有
+		truePay   = 0
+		poolUsed  = trueGen + truePay
+		headerGas = system + poolUsed // 90，远小于 GasLimit
+	)
+	replayed := Budget{LaneSize: laneSize, GeneralUsed: trueGen, PaymentUsed: truePay}
+
+	// 真实的块本身是违规的：1 + 89 + max(0,10) = 100 <= 100 —— 恰好合法，所以
+	// 先确认诚实承诺能过，避免这条 case 因为错误的理由通过。
+	honest := Commitment{LaneSize: laneSize, GeneralGasUsed: trueGen, PaymentGasUsed: truePay}
+	if err := replayed.VerifyCommitment(gasLimit, system, poolUsed, honest); err != nil {
+		t.Fatalf("诚实承诺应通过，实际 %v", err)
+	}
+
+	// 谎言：把 laneSize 那段挪到 payment 桶里冒领。静态门看不出来。
+	lie := Commitment{LaneSize: laneSize, GeneralGasUsed: trueGen - laneSize, PaymentGasUsed: laneSize}
+	sysDerived, err := DeriveSystemGas(headerGas, lie.GeneralGasUsed, lie.PaymentGasUsed)
+	if err != nil {
+		t.Fatalf("反推 systemGasUsed 失败: %v", err)
+	}
+	if err := CheckInequality(gasLimit, sysDerived, lie.GeneralGasUsed, lie.PaymentGasUsed, lie.LaneSize); err != nil {
+		t.Fatalf("前提不成立：静态门本应恒过，实际 %v", err)
+	}
+	if err := replayed.VerifyCommitment(gasLimit, system, poolUsed, lie); !errors.Is(err, ErrCommitmentUntruthy) {
+		t.Fatalf("期望 ErrCommitmentUntruthy，实际 %v", err)
+	}
+
+	// 桶总量对但类别对调，也必须拒 —— 否则 general 可以整体伪装成 payment。
+	swapped := Commitment{LaneSize: laneSize, GeneralGasUsed: truePay, PaymentGasUsed: trueGen}
+	if err := replayed.VerifyCommitment(gasLimit, system, poolUsed, swapped); !errors.Is(err, ErrCommitmentUntruthy) {
+		t.Fatalf("期望 ErrCommitmentUntruthy，实际 %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // header 承诺
 // ---------------------------------------------------------------------------

@@ -1433,17 +1433,15 @@ func (r *BidRuntime) commitTransactionAs(chain *core.BlockChain, chainConfig *pa
 
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, core.NewReceiptBloomGenerator())
 	if err != nil {
-		// 这里没有 gasPool 回滚（与 worker.applyTransaction 不同）：失败即整个
-		// bid 作废、env 被丢弃，所以桶与池的不一致不会被观察到。
 		return err
+	} else if unRevertible && receipt.Status == types.ReceiptStatusFailed {
+		return errors.New("no revertible transaction failed")
 	}
-	// 记账放在 unRevertible 检查之前：那条检查失败时 ApplyTransaction 已经成功、
-	// 池已经推进，若先返回就会留下 桶之和 != gasPool.Used() 的局部破裂状态。
+	// 与紧邻的 header.GasUsed 一样属于「成功之后的记账」。上面两条 error 路径都
+	// 不记账，此时池已推进而桶没动 —— 但那两条都会让整个 bid 作废、env 被丢弃，
+	// 上游同样没有更新 header.GasUsed 与 tcount，不一致不可观察。
 	if env.laneOn {
 		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
-	}
-	if unRevertible && receipt.Status == types.ReceiptStatusFailed {
-		return errors.New("no revertible transaction failed")
 	}
 	env.header.GasUsed = env.gasPool.Used()
 

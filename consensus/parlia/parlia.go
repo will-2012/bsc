@@ -635,7 +635,7 @@ func (p *Parlia) VerifyUnsealedHeader(chain consensus.ChainHeaderReader, header 
 		}
 	}
 
-	// Ensure that the block doesn't contain any uncles which are meaningless in PoA.
+	// Ensure that the block doesn't contain any uncles which are meaningless in PoA
 	//
 	// BEP-703 激活后 UncleHash 承载车道记账，所以「没有 uncle」改由 body 校验
 	// （VerifyUncles / ValidateBody），这里只校验承诺的编码合法性。

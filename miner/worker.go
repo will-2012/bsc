@@ -779,15 +779,14 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	}
 	// Note the passed coinbase may be different with header.Coinbase.
 	env := &environment{
-		signer:      types.MakeSigner(w.chainConfig, header.Number, header.Time),
-		state:       state,
-		size:        uint64(header.Size()),
-		coinbase:    coinbase,
-		gasPool:     core.NewGasPool(header.GasLimit - gasReserved),
-		gasReserved: gasReserved,
-		header:      header,
-		witness:     state.Witness(),
-		evm:         vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
+		signer:   types.MakeSigner(w.chainConfig, header.Number, header.Time),
+		state:    state,
+		size:     uint64(header.Size()),
+		coinbase: coinbase,
+		gasPool:  core.NewGasPool(header.GasLimit - gasReserved),
+		header:   header,
+		witness:  state.Witness(),
+		evm:      vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
 	}
 	// BEP-703。配额只依赖 (parent, header)，所以块内是常量；commitWork 的多轮
 	// 重试每轮重建 env 但看到同一个值，轮间因此可比较。
@@ -798,6 +797,7 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	// Headroom 会把 general 压到 0、sealLane 的自检再决定这个块能不能出。
 	if paymentlane.Enabled(w.chainConfig, header.Number, header.Time) {
 		env.laneOn = true
+		env.gasReserved = gasReserved // 只有 sealLane 的自检用它
 		env.laneBudget = paymentlane.Budget{LaneSize: paymentlane.Quota(parent, header)}
 	}
 	// Keep track of transactions which return errors so they can be removed
@@ -961,6 +961,13 @@ LOOP:
 			break
 		}
 
+		// If we don't have enough space for the next transaction, skip the account.
+		if env.gasPool.Gas() < ltx.Gas {
+			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
+			txs.Pop()
+			continue
+		}
+
 		// Most of the blob gas logic here is agnostic as to if the chain supports
 		// blobs or not, however the max check panics when called on a chain without
 		// a defined schedule, so we need to verify it's safe to call.
@@ -982,16 +989,19 @@ LOOP:
 		}
 		prefetchCurr.Store(tx)
 
-		// If we don't have enough space for the next transaction, skip the account.
+		// BEP-703：上面那句 gasPool.Gas() < ltx.Gas 等价于 payment 谓词，也就是两者
+		// 中更松的那个，所以它只拦「两个类别都装不下」的交易 —— 留着当廉价前置
+		// 过滤，被它拦掉的交易不必付 Resolve 与 Classify 的代价。
 		//
-		// 判断要先知道类别（两类的可用空间不同），而类别要看 To/data/tx type ——
-		// LazyTransaction 上没有，所以上游那句 gasPool.Gas() < ltx.Gas 挪到了
-		// Resolve 之后。Pop 掉整个账户的正确性见 paymentlane.Budget.Headroom：
-		// 两类的 headroom 都单调不增，「现在装不下」就是「永远装不下」。
+		// 这里补的是车道特有的那一半：general 交易还要给尚未填满的配额让位。判断
+		// 必须先知道类别，而类别要看 To/data/tx type，LazyTransaction 上没有，所以
+		// 只能等交易取上来之后。Pop 掉整个账户的正确性见 paymentlane.Budget.Headroom
+		// —— 两类的 headroom 都单调不增，「现在装不下」就是「永远装不下」。
 		class := env.laneClassOf(tx)
 		if !env.laneAdmits(class, tx.Gas()) {
-			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash,
-				"class", class, "left", env.gasPool.Gas(), "needed", tx.Gas())
+			log.Trace("Payment lane reservation leaves no room for transaction",
+				"hash", ltx.Hash, "class", class, "shared", env.gasPool.Gas(),
+				"idleLane", env.laneBudget.IdleLane(), "needed", tx.Gas())
 			txs.Pop()
 			continue
 		}

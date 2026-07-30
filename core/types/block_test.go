@@ -374,3 +374,32 @@ func TestRlpDecodeParentHash(t *testing.T) {
 		}
 	}
 }
+
+// TestNewBlockPreservesCallerUncleHash 锁住 NewBlock 的「零值 = 未设置」哨兵。
+//
+// BEP-696 把 UncleHash 复用为元数据字段，BEP-703 在其中存放车道记账。NewBlock
+// 拿不到 ChainConfig 做分叉门，只能靠这个哨兵区分「调用方写过」和「没写过」。
+// 破坏它的后果是承诺被静默擦掉 —— 本地出块成功、全网 BAD_BLOCK，而
+// ValidateBody 与 VerifyHeader 都指不出原因。
+func TestNewBlockPreservesCallerUncleHash(t *testing.T) {
+	newHeader := func(uncleHash common.Hash) *Header {
+		return &Header{Number: big.NewInt(1), Difficulty: big.NewInt(1), UncleHash: uncleHash}
+	}
+	hasher := blocktest.NewHasher()
+
+	// 未设置（零值）⇒ 沿用历史默认值，与改动前逐字一致
+	if got := NewBlock(newHeader(common.Hash{}), &Body{}, nil, hasher).UncleHash(); got != EmptyUncleHash {
+		t.Errorf("零值 UncleHash 应归一化成 EmptyUncleHash，实际 %x", got)
+	}
+	// 调用方写过 ⇒ 原样保留，不得被覆写
+	commitment := common.HexToHash("0x0000000000556000000000003b9aca00000000000f4240000001000000000000")
+	if got := NewBlock(newHeader(commitment), &Body{}, nil, hasher).UncleHash(); got != commitment {
+		t.Errorf("调用方写入的 UncleHash 被覆写成 %x，期望 %x", got, commitment)
+	}
+	// 有 uncle 时仍必须是 uncle 列表的哈希（该分支未改动）
+	uncles := []*Header{newHeader(EmptyUncleHash)}
+	blk := NewBlock(newHeader(commitment), &Body{Uncles: uncles}, nil, hasher)
+	if got, want := blk.UncleHash(), CalcUncleHash(uncles); got != want {
+		t.Errorf("有 uncle 时 UncleHash = %x，期望 %x", got, want)
+	}
+}

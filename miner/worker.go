@@ -1265,11 +1265,10 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 	// BEP-703 不需要单独的「车道补填轮」：general headroom 耗尽后 payment 交易仍
 	// 按共享余量准入，所以上面两轮会把堆走到空，配额自然被填满。
 	//
-	// 曾经加过第三轮「MinTip=nil 重查池」，前提是 payment 交易因 tip 低而进不了
-	// 候选集 —— 那个前提在 BSC 上不成立（StartMining 把 miner.gasprice 推进
-	// txpool，加上 ErrTipAboveFeeCap 与 BSC 的 baseFee≡0，Pending 的 MinTip 截断
-	// 永不触发），而它会把 MinTip 以下的 general 交易也打包进来。详见
-	// docs/bep703-miner-packing-design.md。
+	// 别加第三轮「MinTip=nil 重查池」：payment 交易并不会因 tip 低而进不了候选集
+	// （StartMining 把 miner.gasprice 推进 txpool，加上 ErrTipAboveFeeCap 与 BSC
+	// 的 baseFee≡0，legacypool.Pending 的 MinTip 截断永不触发），而那一轮会把
+	// MinTip 以下的 general 交易也打包进来，等于悄悄取消矿工的 tip 底线。
 	return nil
 }
 
@@ -1706,8 +1705,9 @@ func (w *worker) commit(env *environment, interval func(), start time.Time) erro
 		if env.header.EmptyWithdrawalsHash() {
 			body.Withdrawals = make([]*types.Withdrawal, 0)
 		}
-		// 在 header 被拷贝并封装之前写入车道承诺。见 sealLane 的注释：准入
-		// 逻辑正确时它不可能失败，所以这里的 return 不会造成保守性槽位损失。
+		// 在 header 被拷贝并封装之前写入车道承诺。失败有两种：记账漏了一笔
+		// （编码 bug），或者 Quota 给出的配额大于本块装得下的量（治理参数误配，
+		// 此时不存在任何合法块）。两种都只能放弃这个槽位。
 		if err := env.sealLane(); err != nil {
 			log.Error("Payment lane invariant violated while sealing, abort",
 				"number", env.header.Number, "err", err)

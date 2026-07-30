@@ -1101,21 +1101,11 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 		err = errors.New("gas used exceeds gas limit")
 		return
 	}
-	// BEP-703：这里**没有**可靠的类别感知早期检查，原因值得写下来。
-	//
-	// bid.GasUsed 是 builder 自报的总量标量，没有类别拆分。想在模拟前判死一个
-	// bid，只能证明它必然不可行。而由 gu+max(pu,L) >= max(gu+pu, L) 得下界是
-	// max(bid.GasUsed, L)，两项分别已被上面的总量检查和 makeEnv 的配额钳制
-	// 覆盖 —— 所以在拿到类别拆分之前，不存在额外的可靠拒收条件。
-	//
-	// 曾经试过用「general 交易 gas 上限之和」做保守上界，那是错的：BSC 上
-	// gas limit 普遍远高于实际消耗，会误杀大量合法 bid。
-	//
-	// 代价是一个「总量合法但 general 部分超限」的 bid 只能在下面的逐笔循环里
-	// 失败，白烧掉整个模拟窗口，且报错是笼统的 "invalid tx in bid"，builder
-	// 无从自适应。要修必须走协议面：RawBid 增加 GeneralGasUsed 字段（进 bid
-	// hash，属签名格式的破坏性变更，需 MevParams.Version 版本协商），并让
-	// mev_params 暴露 laneSize 供 builder 自己算。
+	// BEP-703 在这里加不了类别感知的早期检查：bid.GasUsed 是 builder 自报的总量
+	// 标量，没有类别拆分，而用「general 交易 gas 上限之和」当上界会误杀大量合法
+	// bid（BSC 上 gas limit 普遍远高于实际消耗）。要修得走协议面 —— RawBid 增加
+	// GeneralGasUsed（进 bid hash，需 MevParams.Version 协商）。
+	// 在那之前，general 部分超限的 bid 只能在下面的逐笔循环里失败。
 
 	if len(b.bidsToSim[bidRuntime.bid.BlockNumber]) == 1 {
 		bidSim1stBidTimer.UpdateSince(time.UnixMilli(int64(b.chain.GetHeaderByHash(bidRuntime.bid.ParentHash).MilliTimestamp())))
@@ -1430,8 +1420,12 @@ func (r *BidRuntime) commitTransactionAs(chain *core.BlockChain, chainConfig *pa
 		}
 	}
 
-	// BEP-703：bid 的交易集由 builder 给定，顺序固定、不可跳过，所以一笔装不下
-	// 自己类别预算的交易会让整个 bid 失败，而不是像本地打包那样被跳过。
+	// BEP-703：这道检查不能省。gasPool 只知道共享余量，所以一笔 gas 落在
+	// (shared-IdleLane, shared] 区间的 general 交易会被 ApplyTransaction 正常执行
+	// 并计入 general 桶，直到 sealLane 才发现越界 —— 那时整个块（不只是这个 bid）
+	// 都得放弃。在这里拦掉，最坏只是这个 bid 被拒、回退本地打包。
+	//
+	// bid 的交易集由 builder 给定、顺序固定不可跳过，所以拦到就是整个 bid 失败。
 	if env.laneOn && !env.laneAdmits(class, tx.Gas()) {
 		return paymentlane.ErrViolated
 	}

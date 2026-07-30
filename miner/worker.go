@@ -962,6 +962,7 @@ LOOP:
 		}
 
 		// If we don't have enough space for the next transaction, skip the account.
+		// BEP-703 车道的准入还有第二阶段，在下面 Resolve 之后（那里才有类别）。
 		if env.gasPool.Gas() < ltx.Gas {
 			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
 			txs.Pop()
@@ -989,14 +990,14 @@ LOOP:
 		}
 		prefetchCurr.Store(tx)
 
-		// BEP-703：上面那句 gasPool.Gas() < ltx.Gas 等价于 payment 谓词，也就是两者
-		// 中更松的那个，所以它只拦「两个类别都装不下」的交易 —— 留着当廉价前置
-		// 过滤，被它拦掉的交易不必付 Resolve 与 Classify 的代价。
-		//
-		// 这里补的是车道特有的那一半：general 交易还要给尚未填满的配额让位。判断
-		// 必须先知道类别，而类别要看 To/data/tx type，LazyTransaction 上没有，所以
-		// 只能等交易取上来之后。Pop 掉整个账户的正确性见 paymentlane.Budget.Headroom
-		// —— 两类的 headroom 都单调不增，「现在装不下」就是「永远装不下」。
+		// BEP-703 的准入是两阶段的，分处两地是数据依赖决定的、不是随意排的：
+		//   阶段一在 Resolve 之前（上游那句 gasPool.Gas() < ltx.Gas）—— 它恰好等价于
+		//     payment 谓词，即两者中更松的那个，只拦「两个类别都装不下」的交易；
+		//     用 lazy 句柄就够，被它拦掉的不必付 Resolve 与 Classify 的代价，所以留着。
+		//   阶段二在这里 —— 补车道特有的那一半：general 还要给未填满的配额让位。
+		//     它需要类别，而类别要看 To/data/tx type，LazyTransaction 上没有这些字段。
+		// 两阶段都 Pop 整个账户，正确性见 paymentlane.Budget.Headroom：两类的
+		// headroom 都单调不增，「现在装不下」就是「永远装不下」。
 		class := env.laneClassOf(tx)
 		if !env.laneAdmits(class, tx.Gas()) {
 			log.Trace("Payment lane reservation leaves no room for transaction",
@@ -1009,14 +1010,6 @@ LOOP:
 		// if inclusion of the transaction would put the block size over the
 		// maximum we allow, don't add any more txs to the payload.
 		if !env.txFitsSize(tx) {
-			// 上游在这里 break 整个循环，车道打开后这会饿死配额：payment 交易都是
-			// 小体积转账，本来装得下，却被一笔 calldata 大户连坐，而空转配额按
-			// §3.2 不回收。配额还有空间时改成丢账户继续扫；env.size 单调递增，
-			// 所以 Pop 是正确的。
-			if env.laneOn && env.laneBudget.IdleLane() >= params.TxGas {
-				txs.Pop()
-				continue
-			}
 			break
 		}
 		// Error may be ignored here. The error has already been checked

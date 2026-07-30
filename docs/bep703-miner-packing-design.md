@@ -93,7 +93,6 @@ Parlia 不允许 uncle，该字段恒为 `EmptyUncleHash`、从不被读取。BE
 | `miner/worker.go:179` | `sealLane` —— 写承诺 + 自检 |
 | `miner/worker.go:799-801` | `makeEnv` 初始化，**不做任何钳制**（见 §4） |
 | `miner/worker.go:991-996` | 单点分类 + 单点准入，替换上游那句 `gasPool.Gas() < ltx.Gas` |
-| `miner/worker.go:1006-1009` | `txFitsSize` 不再连坐饿死配额 |
 | `miner/worker.go:1030-1034` | 记账：循环里取快照、`commitTransaction` 返回后差分 |
 | `miner/worker.go:1345`、`:1711` | 两条 assemble 路径在 `AssembleBlock` 之前调 `sealLane` |
 | `miner/bid_simulator.go:755-775` | bid block 签名前的静态门 |
@@ -166,7 +165,7 @@ bid 场景下交易集顺序由 builder 给定、不可重排，这个差别直�
 
 而副作用是真的：它的进入条件「配额还有空间」在不拥堵时恒真，于是会把 `MinTip` 以下的 **general** 交易也打包进来，等于悄悄把矿工对普通流量的 tip 底线降成池门限。代价那侧也不小：`legacypool.Pending` 在 `pool.mu.RLock` 下为每笔交易分配一个 `LazyTransaction`，`MinTip=nil` 时是整个池，还要乘上 `commitWork` 的重试次数和每个 bid 的 greedy merge。
 
-**配额由前两轮直接填满**：general headroom 耗尽后 payment 交易仍按 `shared` 准入，所以循环会一路 Pop 掉装不下的 general 账户、继续把堆走到空，而不是在 general 满时收工。
+**配额由前两轮直接填满**：general headroom 耗尽后 payment 交易仍按 `shared` 准入，所以循环会一路 Pop 掉装不下的 general 账户、继续把堆走到空，而不是在 general 满时收工。唯一的例外是区块先撞到体积上限（`txFitsSize` 会 `break`），而那在 `GasLimit <= 73.9M` 时不可达 —— 见 §7。
 
 ### 4.6 三个桶做进 `core/gaspool.go` —— 不必要
 
@@ -203,7 +202,6 @@ bid 场景下交易集顺序由 builder 给定、不可重排，这个差别直�
 | bid 侧漏掉逐笔准入 | 一笔 gas 落在 `(shared−IdleLane, shared]` 的 general 交易会被 `ApplyTransaction` 正常执行并计入 general 桶，直到 `sealLane` 才发现越界 —— 那时整个块（不只这个 bid）都要放弃 | `bid_simulator.go:1429` 的检查 |
 | bid block 只靠事后 `InsertChain` 拦 | `mux.Post` 在 `InsertChain` 之前，validator 已签名广播 → 零成本让指定 validator 丢槽 | `bid_simulator.go:755` 的签名前静态门 |
 | payBidTx 被判成 payment | MEV 回扣搭上「保障普通转账」的车道 | `bid_simulator.go:1242` 强制 general |
-| `txFitsSize` 直接 `break` | 一笔 calldata 大户连坐饿死整条配额，而空转配额按 §3.2 不回收 | `worker.go:1006` 的车道分支 |
 | 承诺桶用朴素加减法 | `general=2^64-1 / payment=1` 绕回小数值 → 通过检查 → bid block 静态门整个废掉 | `CheckInequality` 与 `DeriveSystemGas` 用 `bits.Add64` |
 
 ---
@@ -242,6 +240,17 @@ bid 场景下交易集顺序由 builder 给定、不可重排，这个差别直�
 - **三个 mock 接缝的真实实现**：`Enabled`（`params.ChainConfig` 的新分叉门，约 14 处挂载）、`Classify`（§3.1，含 tx type 白名单与预编译排除）、`Quota`（§3.3/§3.4，含四条不变量校验与治理参数读取）。
 - **可观测性**：空转配额是 §3.2 明定不回收的真实吞吐损失，代码里没有任何指标暴露它。至少需要 `laneSize` / `paymentUsed` / `IdleLane` 三个 Gauge（**必须是 Gauge 而非 ResettingTimer**——后者在开了 `--metrics` 而无 scraper 时会无界增长）。
 - **BEP 文本待确认**：递推跑在 gas 空间而非 ratio 空间（§4.3）。
+- **`txFitsSize` 的 `break` 会成为配额空转来源 —— 但只在 `GasLimit > 73.9M` 之后。**
+  上游在区块撞到体积上限时 `break` 整个循环，于是本来装得下的小体积 payment 交易
+  也进不来。曾经加过一个「配额还有空间时改成 `Pop` + `continue`」的分支，后来删掉，
+  因为当前不可达：体积上限是 `MaxBlockSize(8MB) − maxBlockSizeBufferZone(1MB) = 7.39MB`，
+  而填满它最便宜的方式是全零 calldata（EIP-7623 floor 10 gas/字节），需要
+  **73.9M gas**；全非零 calldata（40 gas/字节）要 296M。生产配置的 `GasCeil` 是 55M，
+  撞不到。
+  **重新引入的判据是机械的：`GasLimit × 10 > 7_388_608`，即 `GasLimit > 73.9M`。**
+  注意即使可达，损失也有限 —— 那种块是体积受限而非 gas 受限，general 交易本来也加
+  不进来，空转配额不构成额外损失，真实损失只是那些本可装下的小体积 payment 交易的
+  手续费。
 
 ---
 

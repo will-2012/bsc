@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/consensus/parlia"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
@@ -135,6 +136,58 @@ type environment struct {
 	// discarded by its clearLoop). The worker must not discard it even when a
 	// winning bid's env becomes w.current, or the EVM arena is released twice.
 	fromBid bool
+
+	// BEP-703 车道。laneOn 是硬分叉门的快照，避免打包热路径每笔交易都重新
+	// 求值；它为 false 时下面所有车道分支都是死代码，打包行为与分叉前逐字一致。
+	//
+	// gasPool 仍然是唯一的池，容量仍是 GasLimit-gasReserved。车道不是第二个池：
+	// 静态切分预算等价于装箱问题，会拒绝规则本来允许的区块（见 paymentlane.Budget）。
+	// 取而代之的是分别累计两类交易已消耗的 gas，再把 §3.2 的不等式直接当准入
+	// 谓词用 —— laneBudget 就是这两个累计量加上本块配额。
+	laneOn      bool
+	laneBudget  paymentlane.Budget
+	gasReserved uint64 // Parlia 系统交易预留，出块前自检要用
+	// laneOn 时的不变式：laneBudget.PaymentUsed+GeneralUsed == gasPool.Used()
+}
+
+// laneAdmits 报告某类别的交易能否装进本块。
+//
+// 共享余量取 gasPool.Gas() 而不是自己重算，这样 bid 路径上
+// SubGas(PayBidTxGasLimit) 那 25000 的临时预留天然被尊重。
+//
+// 车道关闭时 laneBudget 是零值 ⇒ IdleLane 为 0 ⇒ 两类的 headroom 都等于共享
+// 余量，谓词退化成上游的 `gasPool.Gas() < tx.Gas()`。零回归是零值给的，不需要
+// 特判。
+func (env *environment) laneAdmits(class paymentlane.Class, gasLimit uint64) bool {
+	return env.laneBudget.Admits(env.gasPool.Gas(), class, gasLimit)
+}
+
+// laneClassOf 给一笔外来交易定类别。车道未激活时一律 general —— 这样「未分类」
+// 就不再是一个可能的状态，Account 因此不需要失败模式。
+func (env *environment) laneClassOf(tx *types.Transaction) paymentlane.Class {
+	if !env.laneOn {
+		return paymentlane.ClassGeneral
+	}
+	return paymentlane.Classify(tx)
+}
+
+// sealLane 把车道记账写进 header 承诺，并用与导入侧相同的判据自检。
+//
+// 失败即放弃出块。丢一个槽位远好过广播一个全网必然拒收的块 —— 后者会让
+// validator 持续出坏块直到被 jail，而 ValidateBody 与 VerifyHeader 都指不出
+// 原因，日志里只有 BAD_BLOCK。
+func (env *environment) sealLane() error {
+	if !env.laneOn {
+		return nil
+	}
+	// 承诺的三个值全部来自 laneBudget —— 配额既是本块的打包预算，也是下一块
+	// 递推的起点，一个值两个用途，不需要额外字段。
+	env.header.UncleHash = paymentlane.Encode(paymentlane.Commitment{
+		LaneSize:       env.laneBudget.LaneSize,
+		GeneralGasUsed: env.laneBudget.GeneralUsed,
+		PaymentGasUsed: env.laneBudget.PaymentUsed,
+	})
+	return env.laneBudget.Verify(env.header.GasLimit, env.gasReserved, env.gasPool.Used())
 }
 
 // discard terminates the background prefetcher go-routine. It should
@@ -735,6 +788,18 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 		witness:  state.Witness(),
 		evm:      vm.NewEVM(core.NewEVMBlockContext(header, w.chain, &coinbase), state, w.chainConfig, vm.Config{}),
 	}
+	// BEP-703。配额只依赖 (parent, header)，所以块内是常量；commitWork 的多轮
+	// 重试每轮重建 env 但看到同一个值，轮间因此可比较。
+	//
+	// 这里刻意不对 laneSize 做任何钳制 —— 出块侧唯一能用来钳的量是
+	// gasReserved，而它是矿工本地的启发式上界，验证方看不到，钳了就是共识
+	// 分歧（详见 paymentlane.Budget 的注释）。配额真的大于本块可用预算时，
+	// Headroom 会把 general 压到 0、sealLane 的自检再决定这个块能不能出。
+	if paymentlane.Enabled(w.chainConfig, header.Number, header.Time) {
+		env.laneOn = true
+		env.gasReserved = gasReserved // 只有 sealLane 的自检用它
+		env.laneBudget = paymentlane.Budget{LaneSize: paymentlane.Quota(parent, header)}
+	}
 	// Keep track of transactions which return errors so they can be removed
 	env.tcount = 0
 	return env, nil
@@ -847,6 +912,8 @@ LOOP:
 			}
 		}
 		// If we don't have enough gas for any further transactions then we're done.
+		// BEP-703 不改这一行：payment 谓词更松，故「两类都装不下 TxGas」⟺
+		// 「共享余量 < TxGas」，与原判据等价（TestPaymentPredicateIsTheLooserOne）。
 		if env.gasPool.Gas() < params.TxGas {
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
 			signal = commitInterruptOutOfGas
@@ -895,6 +962,7 @@ LOOP:
 		}
 
 		// If we don't have enough space for the next transaction, skip the account.
+		// BEP-703 车道还要在 Resolve 之后按类别再判一次，见下方。
 		if env.gasPool.Gas() < ltx.Gas {
 			log.Trace("Not enough gas left for transaction", "hash", ltx.Hash, "left", env.gasPool.Gas(), "needed", ltx.Gas)
 			txs.Pop()
@@ -922,6 +990,18 @@ LOOP:
 		}
 		prefetchCurr.Store(tx)
 
+		// BEP-703：上面那句 gasPool.Gas() < ltx.Gas 等价于更松的 payment 谓词，只拦
+		// 「两类都装不下」；这里补车道特有的那一半 —— general 还要给未填满的配额让位。
+		// class 随后还要用于记账（进 header 承诺），所以只算一次。
+		class := env.laneClassOf(tx)
+		if !env.laneAdmits(class, tx.Gas()) {
+			log.Trace("Payment lane reservation leaves no room for transaction",
+				"hash", ltx.Hash, "class", class, "shared", env.gasPool.Gas(),
+				"idleLane", env.laneBudget.IdleLane(), "needed", tx.Gas())
+			txs.Pop()
+			continue
+		}
+
 		// if inclusion of the transaction would put the block size over the
 		// maximum we allow, don't add any more txs to the payload.
 		if !env.txFitsSize(tx) {
@@ -941,7 +1021,15 @@ LOOP:
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
+		// BEP-703：在这里取快照、返回后差分记账，class 因此不用跨函数边界传递，
+		// commitTransaction 及其下游保持上游原样。前提是这里到 core.ApplyTransaction
+		// 之间不能有任何代码改动 gasPool —— 中间插入这类调用会静默算错承诺。
+		// 用差分而不用 receipt.GasUsed 的理由见 paymentlane.Budget.Account。
+		usedBefore := env.gasPool.Used()
 		_, err := w.commitTransaction(env, tx, bloomProcessors)
+		if env.laneOn {
+			env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
+		}
 		switch {
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
@@ -1172,6 +1260,13 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 		}
 	}
 
+	// BEP-703 不需要单独的「车道补填轮」：general headroom 耗尽后 payment 交易仍
+	// 按共享余量准入，所以上面两轮会把堆走到空，配额自然被填满。
+	//
+	// 别加第三轮「MinTip=nil 重查池」：payment 交易并不会因 tip 低而进不了候选集
+	// （StartMining 把 miner.gasprice 推进 txpool，加上 ErrTipAboveFeeCap 与 BSC
+	// 的 baseFee≡0，legacypool.Pending 的 MinTip 截断永不触发），而那一轮会把
+	// MinTip 以下的 general 交易也打包进来，等于悄悄取消矿工的 tip 底线。
 	return nil
 }
 
@@ -1244,6 +1339,10 @@ func (w *worker) generateWork(genParam *generateParams, witness bool) *newPayloa
 	}
 
 	fees := work.state.GetBalance(consensus.SystemAddress)
+	// 车道承诺必须在 AssembleBlock 之前写入 header（dev / Engine API 路径）。
+	if err := work.sealLane(); err != nil {
+		return &newPayloadResult{err: err}
+	}
 	block, receipts, err := core.AssembleBlock(w.engine, w.chain, work.header, work.state, &body, work.receipts)
 	if err != nil {
 		return &newPayloadResult{err: err}
@@ -1603,6 +1702,14 @@ func (w *worker) commit(env *environment, interval func(), start time.Time) erro
 		body := types.Body{Transactions: env.txs}
 		if env.header.EmptyWithdrawalsHash() {
 			body.Withdrawals = make([]*types.Withdrawal, 0)
+		}
+		// 在 header 被拷贝并封装之前写入车道承诺。失败有两种：记账漏了一笔
+		// （编码 bug），或者 Quota 给出的配额大于本块装得下的量（治理参数误配，
+		// 此时不存在任何合法块）。两种都只能放弃这个槽位。
+		if err := env.sealLane(); err != nil {
+			log.Error("Payment lane invariant violated while sealing, abort",
+				"number", env.header.Number, "err", err)
+			return err
 		}
 		block, receipts, err := core.AssembleBlock(w.engine, w.chain, types.CopyHeader(env.header), env.state, &body, env.receipts)
 		env.committed = true

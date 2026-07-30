@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -635,7 +636,17 @@ func (p *Parlia) VerifyUnsealedHeader(chain consensus.ChainHeaderReader, header 
 	}
 
 	// Ensure that the block doesn't contain any uncles which are meaningless in PoA
-	if header.UncleHash != types.EmptyUncleHash {
+	//
+	// BEP-703 激活后 UncleHash 承载车道记账，所以「没有 uncle」改由 body 校验
+	// （VerifyUncles / ValidateBody），这里只校验承诺的编码合法性。
+	//
+	// 这道门必须加：VerifyUnsealedHeader 同时被区块导入（verifyHeader）和
+	// bid block 准入（preSealVerifyBidBlock）走，不改的话带承诺的块两边都进不去。
+	if paymentlane.Enabled(chain.Config(), header.Number, header.Time) {
+		if _, err := paymentlane.Decode(header.UncleHash); err != nil {
+			return err
+		}
+	} else if header.UncleHash != types.EmptyUncleHash {
 		return errInvalidUncleHash
 	}
 
@@ -702,6 +713,25 @@ func (p *Parlia) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 	parent, err := p.getParent(chain, header, parents)
 	if err != nil {
 		return err
+	}
+
+	// BEP-703：承诺里的 laneSize 是**纯 header 函数**（只依赖 parent 与本 header 的
+	// 共识可见字段），所以校验它不需要执行、不需要 state，放在这里最合适 ——
+	// VerifyUnsealedHeader 同时被区块导入与 bid block 准入调用，两条路径白拿；
+	// 而且 header-only 同步阶段就能拦住，不会让一条配额已跑偏的 header 链先被接受。
+	//
+	// 这一条不能推迟到执行侧：laneSize 是递推态，一个未被拒的错值会成为它**全部
+	// 后代**的递推起点 —— 所有节点读同一个父 header，所以不分叉，而是静默地把车道
+	// 摧毁（写 0）或永久饿死 general（写大值）。
+	if paymentlane.Enabled(chain.Config(), header.Number, header.Time) {
+		commitment, err := paymentlane.Decode(header.UncleHash)
+		if err != nil {
+			return err
+		}
+		if want := paymentlane.Quota(parent, header); commitment.LaneSize != want {
+			return fmt.Errorf("%w: header %d want %d", paymentlane.ErrQuotaMismatch,
+				commitment.LaneSize, want)
+		}
 	}
 
 	err = p.blockTimeVerifyForRamanujanFork(snap, header, parent)
@@ -1591,7 +1621,17 @@ func (p *Parlia) finalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	if header.GasLimit < header.GasUsed {
 		return nil, nil, errors.New("gas consumption of system txs exceed the gas limit")
 	}
-	header.UncleHash = types.EmptyUncleHash
+	// BEP-703：这一行原本无条件把 UncleHash 写成 EmptyUncleHash，而它的执行
+	// 时机在矿工写入车道承诺（miner 的 sealLane）之后 —— 不加门就会静默销毁
+	// 承诺，表现为「本地出块成功、全网 BAD_BLOCK」，且 ValidateBody 与
+	// VerifyHeader 都指不出原因。
+	//
+	// 车道激活后 uncle 为空由 VerifyUncles / ValidateBody 在 body 上强制
+	// （符合 BEP-696 的「MUST NOT derive the expected uncle list from
+	// UncleHash」），所以这里不再需要覆写。
+	if !paymentlane.Enabled(p.chainConfig, header.Number, header.Time) {
+		header.UncleHash = types.EmptyUncleHash
+	}
 	var blk *types.Block
 	var rootHash common.Hash
 	wg := sync.WaitGroup{}

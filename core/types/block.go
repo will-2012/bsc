@@ -318,7 +318,16 @@ func NewBlock(header *Header, body *Body, receipts []*Receipt, hasher ListHasher
 	}
 
 	if len(uncles) == 0 {
-		b.header.UncleHash = EmptyUncleHash
+		// BEP-696 把 UncleHash 复用为元数据字段，BEP-703 在其中存放车道记账，
+		// 所以调用方写入的值不能被覆盖。NewBlock 拿不到 ChainConfig 做分叉门，
+		// 因此用「零值 = 未设置」的判据：没设置过的字段仍然得到历史默认值。
+		//
+		// 「uncle 列表为空」由 body 侧的 VerifyUncles 与 ValidateBody 强制，
+		// 这正是 BEP-696 的要求（MUST NOT derive the expected uncle list from
+		// UncleHash）。
+		if b.header.UncleHash == (common.Hash{}) {
+			b.header.UncleHash = EmptyUncleHash
+		}
 	} else {
 		b.header.UncleHash = CalcUncleHash(uncles)
 		b.uncles = make([]*Header, len(uncles))

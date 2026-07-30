@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/consensus/parlia"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
 	buildertypes "github.com/ethereum/go-ethereum/core/types/builder"
@@ -741,6 +742,41 @@ func (b *bidSimulator) preSealVerifyBidBlock(decoded *buildertypes.DecodedBidBlo
 	if txHash := types.DeriveSha(decoded.Txs, trie.NewStackTrie(nil)); header.TxHash != txHash {
 		return fmt.Errorf("invalid tx root: got %s, want %s", header.TxHash, txHash)
 	}
+	// BEP-703：责任划分是「builder 负责把承诺算对，validator 负责校验」。校验的
+	// 权威点在导入侧（core/state_processor.go 重放执行后比对两个桶）；这里是签名
+	// 前的**廉价预筛**，因为 validator 在 InsertChain 之前就 mux.Post 广播了
+	// （见 miner/bid_block.go），静态检查能拦一笔算一笔。
+	//
+	// 这道门能拦的：承诺畸形、桶溢出、不等式自身不成立 —— 也就是「builder 算错
+	// 了」这一类。拦不住的是**说谎**：builder 只要声称 PaymentGasUsed ==
+	// laneSize，max(payment, laneSize) 就塌缩成 laneSize，不等式左边恒等于
+	// header.GasUsed，而 GasUsed <= GasLimit 已由 VerifyUnsealedHeader 保证，
+	// 于是必然通过本门。真实性需要执行，签名前无法判定。
+	//
+	// 但说谎者拿不到好处：块进不了 canonical 链（导入侧拒），拿不到出块奖励，还
+	// 会被 revoke。剩下的只是「让这个 validator 丢一个槽位」的纯捣乱，而这与
+	// Root / ReceiptHash / Bloom / GasUsed 同属一类 —— 它们同样只靠事后
+	// InsertChain 兜底，是 BEP-675 拓扑固有的既存面，车道只是多加一个字段。
+	//
+	// laneSize 的校验已前移到 parlia.verifyCascadingFields（纯 header 函数，
+	// VerifyUnsealedHeader 在上面已经调过），这里不再重复。
+	if paymentlane.Enabled(b.chainConfig, header.Number, header.Time) {
+		commitment, err := paymentlane.Decode(header.UncleHash)
+		if err != nil {
+			return err
+		}
+		// 两个桶是 builder 完全可控的 uint64，反推 systemGasUsed 的减法必须防
+		// 溢出，否则 general=2^64-1 / payment=1 这一对会绕过全部检查。
+		systemGasUsed, err := paymentlane.DeriveSystemGas(header.GasUsed,
+			commitment.GeneralGasUsed, commitment.PaymentGasUsed)
+		if err != nil {
+			return err
+		}
+		if err := paymentlane.CheckInequality(header.GasLimit, systemGasUsed,
+			commitment.GeneralGasUsed, commitment.PaymentGasUsed, commitment.LaneSize); err != nil {
+			return err
+		}
+	}
 
 	decoded.SystemTxStart, decoded.GasFee = parliaEngine.ExtractBidBlockDepositValue(decoded.Txs)
 
@@ -1069,6 +1105,11 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 		err = errors.New("gas used exceeds gas limit")
 		return
 	}
+	// BEP-703 在这里加不了类别感知的早期检查：bid.GasUsed 是 builder 自报的总量
+	// 标量，没有类别拆分，而用「general 交易 gas 上限之和」当上界会误杀大量合法
+	// bid（BSC 上 gas limit 普遍远高于实际消耗）。要修得走协议面 —— RawBid 增加
+	// GeneralGasUsed（进 bid hash，需 MevParams.Version 协商）。
+	// 在那之前，general 部分超限的 bid 只能在下面的逐笔循环里失败。
 
 	if len(b.bidsToSim[bidRuntime.bid.BlockNumber]) == 1 {
 		bidSim1stBidTimer.UpdateSince(time.UnixMilli(int64(b.chain.GetHeaderByHash(bidRuntime.bid.ParentHash).MilliTimestamp())))
@@ -1374,11 +1415,37 @@ func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *para
 		}
 	}
 
+	// BEP-703：类别一律由分类器决定，绝不能在这里按交易的用途特判。
+	//
+	// 典型的诱惑是 payBidTx —— 它是 sentry 打给 builder 的纯转账、data 为空，按
+	// §3.1 类别① 会被判成 payment，于是 MEV 回扣搭上了「保障普通转账」的车道
+	// （25000 gas，约配额的 0.3%~0.9%）。但验证方在导入时只看得到一笔普通交易，
+	// 它不满足 IsSystemTransaction、也没有任何结构标记可供识别；矿工这边把它归
+	// general，验证方按机械判据算成 payment，两侧的桶就不一致 —— 直接 BAD_BLOCK。
+	// 要排除它只能改 BEP §3.1，且必须给出两侧都能求值的判据。
+	//
+	// 这道准入检查不能省：gasPool 只知道共享余量，所以一笔 gas 落在
+	// (shared-IdleLane, shared] 区间的 general 交易会被 ApplyTransaction 正常执行
+	// 并计入 general 桶，直到 sealLane 才发现越界 —— 那时整个块（不只是这个 bid）
+	// 都得放弃。在这里拦掉，最坏只是这个 bid 被拒、回退本地打包。
+	// bid 的交易集由 builder 给定、顺序固定不可跳过，所以拦到就是整个 bid 失败。
+	class := env.laneClassOf(tx)
+	if env.laneOn && !env.laneAdmits(class, tx.Gas()) {
+		return paymentlane.ErrViolated
+	}
+	usedBefore := env.gasPool.Used()
+
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, core.NewReceiptBloomGenerator())
 	if err != nil {
 		return err
 	} else if unRevertible && receipt.Status == types.ReceiptStatusFailed {
 		return errors.New("no revertible transaction failed")
+	}
+	// 与紧邻的 header.GasUsed 一样属于「成功之后的记账」。上面两条 error 路径都
+	// 不记账，此时池已推进而桶没动 —— 但那两条都会让整个 bid 作废、env 被丢弃，
+	// 上游同样没有更新 header.GasUsed 与 tcount，不一致不可观察。
+	if env.laneOn {
+		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
 	}
 	env.header.GasUsed = env.gasPool.Used()
 

@@ -715,6 +715,25 @@ func (p *Parlia) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		return err
 	}
 
+	// BEP-703：承诺里的 laneSize 是**纯 header 函数**（只依赖 parent 与本 header 的
+	// 共识可见字段），所以校验它不需要执行、不需要 state，放在这里最合适 ——
+	// VerifyUnsealedHeader 同时被区块导入与 bid block 准入调用，两条路径白拿；
+	// 而且 header-only 同步阶段就能拦住，不会让一条配额已跑偏的 header 链先被接受。
+	//
+	// 这一条不能推迟到执行侧：laneSize 是递推态，一个未被拒的错值会成为它**全部
+	// 后代**的递推起点 —— 所有节点读同一个父 header，所以不分叉，而是静默地把车道
+	// 摧毁（写 0）或永久饿死 general（写大值）。
+	if paymentlane.Enabled(chain.Config(), header.Number, header.Time) {
+		commitment, err := paymentlane.Decode(header.UncleHash)
+		if err != nil {
+			return err
+		}
+		if want := paymentlane.Quota(parent, header); commitment.LaneSize != want {
+			return fmt.Errorf("%w: header %d want %d", paymentlane.ErrQuotaMismatch,
+				commitment.LaneSize, want)
+		}
+	}
+
 	err = p.blockTimeVerifyForRamanujanFork(snap, header, parent)
 	if err != nil {
 		return err

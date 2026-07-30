@@ -747,11 +747,21 @@ func (b *bidSimulator) preSealVerifyBidBlock(decoded *buildertypes.DecodedBidBlo
 	// 所以车道违规只会在块已经上线之后暴露 —— validator 丢一个槽位，builder
 	// 只是被 revoke，等于零成本让指定 validator 丢槽。
 	//
-	// 记账承诺进 header 之后，规则在这里退化为纯算术，可以在签名前拒掉。
+	// 这道门只挡得住「承诺畸形 / 桶溢出 / 不等式自身不成立」这一类，**挡不住
+	// 承诺说谎**，而说谎恰好是唯一有收益的作恶方式：builder 只要声称
+	// PaymentGasUsed == laneSize，max(payment, laneSize) 就塌缩成 laneSize，
+	// 不等式左边恒等于 header.GasUsed，而 GasUsed <= GasLimit 已由
+	// VerifyUnsealedHeader 保证 —— 于是车道被完全绕开且必然通过本门。
 	//
-	// 注意这里只能证明「承诺自洽且满足不等式」，不能证明「承诺真实」——
-	// 真实性需要执行，由事后 InsertChain 的校验兜底 + builder revoke 惩罚。
-	// 这个组合已经够：作恶者再也无法让 validator 丢槽，最多是自己被拒并 revoke。
+	// 真实性需要执行，只能由事后 InsertChain 兜底；而 mux.Post 在 InsertChain
+	// 之前，所以「零成本让指定 validator 丢槽」这条攻击面**没有被关闭**，只是
+	// 门槛从「随便乱填」提到了「填一组自洽的假数」。车道让这条既有攻击面（Root /
+	// ReceiptHash / GasUsed 同样只靠 InsertChain 兜底）第一次变得**有利可图**：
+	// 绕开配额能多打 laneSize 的 general gas ⇒ GasFee 更高 ⇒ 赢过诚实 bid。
+	// 待决方案见 docs/bep703-miner-packing-design.md。
+	//
+	// laneSize 的校验已前移到 parlia.verifyCascadingFields（纯 header 函数，
+	// VerifyUnsealedHeader 在上面已经调过），这里不再重复。
 	if paymentlane.Enabled(b.chainConfig, header.Number, header.Time) {
 		commitment, err := paymentlane.Decode(header.UncleHash)
 		if err != nil {
@@ -764,12 +774,8 @@ func (b *bidSimulator) preSealVerifyBidBlock(decoded *buildertypes.DecodedBidBlo
 		if err != nil {
 			return err
 		}
-		laneSize := paymentlane.Quota(parent, header)
-		if commitment.LaneSize != laneSize {
-			return paymentlane.ErrQuotaMismatch
-		}
 		if err := paymentlane.CheckInequality(header.GasLimit, systemGasUsed,
-			commitment.GeneralGasUsed, commitment.PaymentGasUsed, laneSize); err != nil {
+			commitment.GeneralGasUsed, commitment.PaymentGasUsed, commitment.LaneSize); err != nil {
 			return err
 		}
 	}

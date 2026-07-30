@@ -225,8 +225,10 @@ func TestLaneSizeExceedsCapacity(t *testing.T) {
 // TestPayBidTxAlwaysFitsAfterLaneAdmission 守住 bid 路径的代数闭合：循环期间
 // SubGas(PayBidTxGasLimit) 的预留保证 payBidTx 在 AddGas 之后一定装得下。
 //
-// payBidTx 被强制归 general（否则 MEV 回扣会搭上保障普通转账的车道），
-// 所以它要的是 general headroom。
+// 注意 payBidTx 现在**不**特判，由分类器决定（`bid_simulator.go` 里的论证：
+// 验证方无法识别它，矿工单方面归 general 会让两侧的桶不一致）。所以现实里它走
+// payment 分类、无条件装得下。这里断言的是更强的 general 情形 —— 万一将来 BEP
+// 加了排除条款把它改判 general，Quota 必须满足的前提就是下面那个阈值。
 func TestPayBidTxAlwaysFitsAfterLaneAdmission(t *testing.T) {
 	const capacity, payBidTxGas = 1000, 25
 	for seed := int64(0); seed < 2000; seed++ {

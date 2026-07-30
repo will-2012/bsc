@@ -805,12 +805,12 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 	return env, nil
 }
 
-func (w *worker) commitTransaction(env *environment, tx *types.Transaction, class paymentlane.Class, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
+func (w *worker) commitTransaction(env *environment, tx *types.Transaction, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
 	if tx.Type() == types.BlobTxType {
-		return w.commitBlobTransaction(env, tx, class, receiptProcessors...)
+		return w.commitBlobTransaction(env, tx, receiptProcessors...)
 	}
 
-	receipt, err := w.applyTransaction(env, tx, class, receiptProcessors...)
+	receipt, err := w.applyTransaction(env, tx, receiptProcessors...)
 	if err != nil {
 		return nil, err
 	}
@@ -821,7 +821,7 @@ func (w *worker) commitTransaction(env *environment, tx *types.Transaction, clas
 	return receipt.Logs, nil
 }
 
-func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, class paymentlane.Class, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
+func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, receiptProcessors ...core.ReceiptProcessor) ([]*types.Log, error) {
 	sc := types.NewBlobSidecarFromTx(tx)
 	if sc == nil {
 		panic("blob transaction without blobs in miner")
@@ -835,7 +835,7 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, 
 		return nil, errors.New("max data blobs reached")
 	}
 
-	receipt, err := w.applyTransaction(env, tx, class, receiptProcessors...)
+	receipt, err := w.applyTransaction(env, tx, receiptProcessors...)
 	if err != nil {
 		return nil, err
 	}
@@ -852,24 +852,16 @@ func (w *worker) commitBlobTransaction(env *environment, tx *types.Transaction, 
 }
 
 // applyTransaction runs the transaction. If execution fails, state and gas pool are reverted.
-func (w *worker) applyTransaction(env *environment, tx *types.Transaction, class paymentlane.Class, receiptProcessors ...core.ReceiptProcessor) (*types.Receipt, error) {
+func (w *worker) applyTransaction(env *environment, tx *types.Transaction, receiptProcessors ...core.ReceiptProcessor) (*types.Receipt, error) {
 	var (
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Snapshot()
-		// 紧邻 ApplyTransaction 取池计数快照。取早了会把无关的池变动
-		// （例如 bid 路径在循环之前做的 SubGas(PayBidTxGasLimit)）算成这一笔
-		// 的消耗，承诺随之虚高。
-		usedBefore = env.gasPool.Used()
 	)
 
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, receiptProcessors...)
 	if err != nil {
-		// 池被恢复 ⇒ 下面的差分为 0，两个桶自动不受影响，不需要单独的回滚路径。
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.Set(gp)
-	}
-	if env.laneOn {
-		env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
 	}
 	env.header.GasUsed = env.gasPool.Used()
 	return receipt, err
@@ -920,18 +912,8 @@ LOOP:
 			}
 		}
 		// If we don't have enough gas for any further transactions then we're done.
-		//
-		// BEP-703 不需要改这一行，穷举可证：payment 谓词是两者中更松的那个
-		// （它不减 IdleLane），所以「两个类别都装不下 TxGas」⟺「共享余量 <
-		// TxGas」，与原判据完全等价。
-		//
-		// 反面教材是拿 laneRemaining 当「车道还能不能收」的代理量：车道是从
-		// 共享池取 gas 的，laneRemaining 只表示车道还「想要」多少。写成
-		// `shared < laneRemaining+TxGas && laneRemaining < TxGas` 会在两个方向
-		// 同时出错 —— shared 已归零而 laneRemaining 仍大于 TxGas 时不肯停
-		// （把整个堆 Pop 光才退出，正是拥堵块尾部的常态）；laneRemaining 小于
-		// TxGas 而 shared 仍有 [TxGas, laneRemaining+TxGas) 的余量时又提前停
-		// （放弃本可打包的 payment 交易）。
+		// BEP-703 不改这一行：payment 谓词更松，故「两类都装不下 TxGas」⟺
+		// 「共享余量 < TxGas」，与原判据等价（TestPaymentPredicateIsTheLooserOne）。
 		if env.gasPool.Gas() < params.TxGas {
 			log.Trace("Not enough gas for further transactions", "have", env.gasPool, "want", params.TxGas)
 			signal = commitInterruptOutOfGas
@@ -1017,14 +999,10 @@ LOOP:
 		// if inclusion of the transaction would put the block size over the
 		// maximum we allow, don't add any more txs to the payload.
 		if !env.txFitsSize(tx) {
-			// 上游在这里 break 整个循环。车道打开后这会静默饿死配额：payment
-			// 交易都是 21k gas 的小体积转账，本来装得下，却被一笔 calldata 大户
-			// 连坐。而空转配额按 §3.2 不回收、仍按 max(pu, L) 向区块收费，等于
-			// 凭一笔大交易把区块有效容量再削掉一个 L。
-			//
-			// 配额还有空间时改成丢弃该账户后继续扫。env.size 单调递增，所以
-			// 「现在装不下」就是「永远装不下」，Pop 是正确的；扫描量仍被堆大小
-			// 与 stopTimer 界住。
+			// 上游在这里 break 整个循环，车道打开后这会饿死配额：payment 交易都是
+			// 小体积转账，本来装得下，却被一笔 calldata 大户连坐，而空转配额按
+			// §3.2 不回收。配额还有空间时改成丢账户继续扫；env.size 单调递增，
+			// 所以 Pop 是正确的。
 			if env.laneOn && env.laneBudget.IdleLane() >= params.TxGas {
 				txs.Pop()
 				continue
@@ -1045,7 +1023,15 @@ LOOP:
 		// Start executing the transaction
 		env.state.SetTxContext(tx.Hash(), env.tcount)
 
-		_, err := w.commitTransaction(env, tx, class, bloomProcessors)
+		// BEP-703：在这里取快照、返回后差分记账，class 因此不用跨函数边界传递，
+		// commitTransaction 及其下游保持上游原样。前提是这里到 core.ApplyTransaction
+		// 之间不能有任何代码改动 gasPool —— 中间插入这类调用会静默算错承诺。
+		// 用差分而不用 receipt.GasUsed 的理由见 paymentlane.Budget.Account。
+		usedBefore := env.gasPool.Used()
+		_, err := w.commitTransaction(env, tx, bloomProcessors)
+		if env.laneOn {
+			env.laneBudget.Account(class, env.gasPool.Used()-usedBefore)
+		}
 		switch {
 		case errors.Is(err, core.ErrNonceTooLow):
 			// New head notification data race between the transaction pool and miner, shift
@@ -1276,34 +1262,14 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 		}
 	}
 
-	// BEP-703 不需要单独的「车道补填轮」。配额由上面两轮直接填满，依据是
-	// commitTransactions 里的车道感知准入：general headroom 耗尽后 payment
-	// 交易仍按共享余量准入（不减 IdleLane），所以循环会一路 Pop 掉装不下的
-	// general 账户、继续把堆走到空，而不是在 general 满时收工。
+	// BEP-703 不需要单独的「车道补填轮」：general headroom 耗尽后 payment 交易仍
+	// 按共享余量准入，所以上面两轮会把堆走到空，配额自然被填满。
 	//
-	// 曾经加过第三轮「MinTip=nil 重查池」，前提是「payment 交易因 tip 低而被
-	// filter.MinTip 挡在候选集外」。那个前提在 BSC 上不成立，三条互相独立的
-	// 理由：
-	//   (1) eth/backend.go 的 StartMining 把 miner.gasprice 推进 txpool
-	//       (txPool.SetGasTip)，而 legacypool.SetGasTip 会用 TxsBelowTip 逐出
-	//       低于新门限的交易 —— 池的准入门限与 w.tip 同源；
-	//   (2) core/txpool/validation.go 的 ErrTipAboveFeeCap 强制
-	//       GasFeeCap >= GasTipCap；
-	//   (3) eip1559.CalcBaseFee 对 IsInBSC() 恒返回 InitialBaseFeeForBSC = 0。
-	// 合起来，legacypool.Pending 的截断判据
-	// effectiveTip = min(GasTipCap, GasFeeCap-BaseFee) 退化成
-	// GasTipCap >= pool.gasTip = MinTip，永不触发 —— 重查一次拿回来的候选集与
-	// 前两轮逐字相同。
-	//
-	// 而代价是实打实的：legacypool.Pending 在 pool.mu.RLock 下为每笔交易分配一个
-	// LazyTransaction，MinTip=nil 时是整个池；这个代价还要乘上 commitWork 的重试
-	// 次数和每个 bid 的 greedy merge。更糟的是它的进入条件「配额还有空间」在
-	// 不拥堵时恒真，于是会把 MinTip 以下的 general 交易也打包进来 —— 等于悄悄把
-	// 矿工对普通流量的 tip 底线降成池门限，超出了车道的授权范围。
-	//
-	// 若将来 (1) 的耦合被解开（矿工门限严格高于池门限），才需要补一轮，且判据
-	// 应当是两个门限的精确比较，而不是「配额还有空间」。
-
+	// 曾经加过第三轮「MinTip=nil 重查池」，前提是 payment 交易因 tip 低而进不了
+	// 候选集 —— 那个前提在 BSC 上不成立（StartMining 把 miner.gasprice 推进
+	// txpool，加上 ErrTipAboveFeeCap 与 BSC 的 baseFee≡0，Pending 的 MinTip 截断
+	// 永不触发），而它会把 MinTip 以下的 general 交易也打包进来。详见
+	// docs/bep703-miner-packing-design.md。
 	return nil
 }
 

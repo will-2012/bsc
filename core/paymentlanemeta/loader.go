@@ -10,18 +10,35 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// LoadMeta reads the parent-pinned lane params and payment-contract membership through the
-// PaymentLane getters, while keeping those reads on the StateDB witness-visible path.
-func LoadMeta(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (Meta, error) {
+var loadMetaCache metaCache
+
+// LoadMeta returns parent-pinned lane metadata. Cache hits reuse the shared Meta directly;
+// misses repopulate it through the PaymentLane getters on the StateDB witness-visible path.
+// The cache key comes from 0x2007's account in the supplied StateDB, so callers must pass a
+// block state that is still opened on the parent root and not yet advanced by execution.
+func LoadMeta(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (*Meta, error) {
+	if err := statedb.Error(); err != nil {
+		return nil, fmt.Errorf("%w: payment lane state read: %w", paymentlane.ErrStateUnavailable, err)
+	}
+	if !canCacheMeta(statedb) {
+		return loadMetaFromStateDB(config, header, statedb)
+	}
+	key := metaCacheKeyFromStateDB(statedb)
+	return loadMetaCache.loadOrStore(key, func() (*Meta, error) {
+		return loadMetaFromStateDB(config, header, statedb)
+	})
+}
+
+func loadMetaFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (*Meta, error) {
 	params, err := loadParamsFromStateDB(config, header, statedb)
 	if err != nil {
-		return Meta{}, err
+		return nil, err
 	}
 	listed, err := loadListedFromStateDB(config, header, statedb)
 	if err != nil {
-		return Meta{}, err
+		return nil, err
 	}
-	return Meta{Params: params, Listed: listed}, nil
+	return &Meta{params: params, listed: listed}, nil
 }
 
 // LoadParamsForQuota reads only the params needed for lane-size verification from a StateDB

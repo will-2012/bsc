@@ -55,6 +55,7 @@ func laneHeader(number uint64) *types.Header {
 }
 
 func TestLoadMetaReadsDefaults(t *testing.T) {
+	loadMetaCache = metaCache{}
 	statedb := deployedContractState(t)
 
 	got, err := LoadMeta(params.BSCChainConfig, laneHeader(60_000_000), statedb)
@@ -68,11 +69,12 @@ func TestLoadMetaReadsDefaults(t *testing.T) {
 		ShrinkStep:    50,
 		MinGas:        2_000_000,
 		MaxGas:        8_000_000,
-	}, got.Params)
-	require.Nil(t, got.Listed)
+	}, got.Params())
+	require.Nil(t, got.listed)
 }
 
 func TestLoadMetaPagesLongLists(t *testing.T) {
+	loadMetaCache = metaCache{}
 	statedb := deployedContractState(t)
 	wantParams := paymentlane.Params{
 		MinRatio:      150,
@@ -99,11 +101,22 @@ func TestLoadMetaPagesLongLists(t *testing.T) {
 
 	got, err := LoadMeta(params.BSCChainConfig, laneHeader(60_000_000), statedb)
 	require.NoError(t, err)
-	require.Equal(t, wantParams, got.Params)
-	require.Len(t, got.Listed, len(listed))
+	require.Equal(t, wantParams, got.Params())
+	require.Len(t, got.listed, len(listed))
 	for _, addr := range listed {
-		require.Contains(t, got.Listed, addr)
+		require.Contains(t, got.listed, addr)
 	}
+}
+
+func TestLoadMetaReusesCachedMeta(t *testing.T) {
+	loadMetaCache = metaCache{}
+	statedb := deployedContractState(t)
+
+	got1, err := LoadMeta(params.BSCChainConfig, laneHeader(60_000_000), statedb)
+	require.NoError(t, err)
+	got2, err := LoadMeta(params.BSCChainConfig, laneHeader(60_000_001), statedb)
+	require.NoError(t, err)
+	require.Same(t, got1, got2)
 }
 
 func TestLoadParamsForQuotaStaysOnParentRoot(t *testing.T) {

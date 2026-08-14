@@ -80,9 +80,9 @@ func ResolveLaneState(config *params.ChainConfig, parent, header *types.Header, 
 		return nil, err
 	}
 	return &LaneState{
-		cfg:      meta.Params,
+		cfg:      meta.Params(),
 		signal:   signal,
-		class:    paymentlane.NewClassifier(statedb, meta.Listed),
+		class:    meta.NewClassifier(statedb),
 		state:    statedb,
 		gasLimit: header.GasLimit,
 	}, nil

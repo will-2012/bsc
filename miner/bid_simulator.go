@@ -1207,6 +1207,12 @@ func (b *bidSimulator) simBid(interruptCh chan int32, bidRuntime *BidRuntime) {
 		return
 	}
 
+	if err = bidRuntime.env.lane.VerifyPackedBid(bidRuntime.env.gasPool.Gas()); err != nil {
+		log.Warn("BidSimulator: bid rejected by the payment lane", "builder", bidRuntime.bid.Builder,
+			"bidHash", bidRuntime.bid.Hash(), "err", err)
+		return
+	}
+
 	bestBid := b.GetBestBid(parentHash)
 	simElapsed := time.Since(startTS)
 	if bestBid == nil {
@@ -1374,10 +1380,15 @@ func (r *BidRuntime) commitTransaction(chain *core.BlockChain, chainConfig *para
 		}
 	}
 
+	class := env.lane.Classify(tx)
+	usedBefore := env.gasPool.Used()
+
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, core.NewReceiptBloomGenerator())
 	if err != nil {
 		return err
-	} else if unRevertible && receipt.Status == types.ReceiptStatusFailed {
+	}
+	env.lane.RecordUsedFrom(class, env.gasPool, usedBefore)
+	if unRevertible && receipt.Status == types.ReceiptStatusFailed {
 		return errors.New("no revertible transaction failed")
 	}
 	env.header.GasUsed = env.gasPool.Used()

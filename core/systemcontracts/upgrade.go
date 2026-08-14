@@ -16,6 +16,7 @@ import (
 	feynmanFix "github.com/ethereum/go-ethereum/core/systemcontracts/feynman_fix"
 	"github.com/ethereum/go-ethereum/core/systemcontracts/gibbs"
 	haberFix "github.com/ethereum/go-ethereum/core/systemcontracts/haber_fix"
+	"github.com/ethereum/go-ethereum/core/systemcontracts/jenner"
 	"github.com/ethereum/go-ethereum/core/systemcontracts/kepler"
 	"github.com/ethereum/go-ethereum/core/systemcontracts/lorentz"
 	"github.com/ethereum/go-ethereum/core/systemcontracts/luban"
@@ -98,6 +99,8 @@ var (
 	fermiUpgrade = make(map[string]*Upgrade)
 
 	pasteurUpgrade = make(map[string]*Upgrade)
+
+	jennerUpgrade = make(map[string]*Upgrade)
 )
 
 func init() {
@@ -1106,6 +1109,41 @@ func init() {
 			},
 		},
 	}
+
+	// PaymentLane (BEP-703) needs no initialize(): every unwritten slot reads as its default in
+	// the contract itself, so Jenner ships bytecode only.
+	jennerUpgrade[mainNet] = &Upgrade{
+		UpgradeName: "jenner",
+		Configs: []*UpgradeConfig{
+			{
+				ContractAddr: common.HexToAddress(PaymentLaneContract),
+				CommitUrl:    "https://github.com/bnb-chain/bsc-genesis-contract/commit/df4615d95427a91ed00ae3df008c97b6bf06a3e8",
+				Code:         jenner.MainnetPaymentLaneContract,
+			},
+		},
+	}
+
+	jennerUpgrade[chapelNet] = &Upgrade{
+		UpgradeName: "jenner",
+		Configs: []*UpgradeConfig{
+			{
+				ContractAddr: common.HexToAddress(PaymentLaneContract),
+				CommitUrl:    "https://github.com/bnb-chain/bsc-genesis-contract/commit/df4615d95427a91ed00ae3df008c97b6bf06a3e8",
+				Code:         jenner.ChapelPaymentLaneContract,
+			},
+		},
+	}
+
+	jennerUpgrade[rialtoNet] = &Upgrade{
+		UpgradeName: "jenner",
+		Configs: []*UpgradeConfig{
+			{
+				ContractAddr: common.HexToAddress(PaymentLaneContract),
+				CommitUrl:    "https://github.com/bnb-chain/bsc-genesis-contract/commit/df4615d95427a91ed00ae3df008c97b6bf06a3e8",
+				Code:         jenner.RialtoPaymentLaneContract,
+			},
+		},
+	}
 }
 
 func TryUpdateBuildInSystemContract(config *params.ChainConfig, blockNumber *big.Int, lastBlockTime uint64, blockTime uint64, statedb vm.StateDB, atBlockBegin bool) {
@@ -1227,6 +1265,10 @@ func upgradeBuildInSystemContract(config *params.ChainConfig, blockNumber *big.I
 
 	if config.IsOnPasteur(blockNumber, lastBlockTime, blockTime) {
 		applySystemContractUpgrade(pasteurUpgrade[network], blockNumber, statedb, logger)
+	}
+
+	if config.IsOnJenner(blockNumber, lastBlockTime, blockTime) {
+		applySystemContractUpgrade(jennerUpgrade[network], blockNumber, statedb, logger)
 	}
 
 	/*

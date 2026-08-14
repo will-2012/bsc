@@ -800,7 +800,7 @@ func (q *queue) DeliverBodies(id string, hashes eth.BlockBodyHashes, bodies []et
 		if hashes.TransactionRoots[index] != header.TxHash {
 			return errInvalidBody
 		}
-		if hashes.UncleHashes[index] != header.UncleHash {
+		if !header.UncleHashMatches(hashes.UncleHashes[index]) {
 			return errInvalidBody
 		}
 		if header.WithdrawalsHash == nil {

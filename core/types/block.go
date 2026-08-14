@@ -214,7 +214,7 @@ func (h *Header) EmptyBody() bool {
 	var (
 		emptyWithdrawals = h.WithdrawalsHash == nil || *h.WithdrawalsHash == EmptyWithdrawalsHash
 	)
-	return h.TxHash == EmptyTxsHash && h.UncleHash == EmptyUncleHash && emptyWithdrawals
+	return h.TxHash == EmptyTxsHash && h.IsEmptyUncleHash() && emptyWithdrawals
 }
 
 // EmptyReceipts returns true if there are no receipts for this header/block.
@@ -509,6 +509,10 @@ func (b *Block) Size() uint64 {
 
 func (b *Block) SetRoot(root common.Hash) { b.header.Root = root }
 
+// SetUncleHash overwrites the uncle slot, which from the block after BEP-703's activation
+// carries the payment lane commitment instead of an uncle list hash.
+func (b *Block) SetUncleHash(hash common.Hash) { b.header.UncleHash = hash }
+
 // SanityCheck can be used to prevent that unbounded fields are
 // stuffed with junk data to add processing overhead
 func (b *Block) SanityCheck() error {
@@ -536,6 +540,28 @@ func CalcUncleHash(uncles []*Header) common.Hash {
 	}
 	return rlpHash(uncles)
 }
+
+// isLaneCommitment reports whether h has the shape of a BEP-703 commitment - a zero reserved
+// tail, which the all-zero hash also has. Shape only; validity is core/paymentlane's job, and
+// this must stay in step with its Decode, which the import cycle keeps out of reach from here.
+func isLaneCommitment(h common.Hash) bool {
+	for _, b := range h[16:] {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// UncleHashMatches reports whether a delivered uncle list hash is the one this header commits to.
+// From BEP-703's activation the header slot may carry a lane commitment, which means no uncles.
+func (h *Header) UncleHashMatches(bodyUncleHash common.Hash) bool {
+	return bodyUncleHash == h.UncleHash ||
+		(bodyUncleHash == EmptyUncleHash && isLaneCommitment(h.UncleHash))
+}
+
+// IsEmptyUncleHash reports whether this header commits to no uncles.
+func (h *Header) IsEmptyUncleHash() bool { return h.UncleHashMatches(EmptyUncleHash) }
 
 // CalcRequestsHash creates the block requestsHash value for a list of requests.
 func CalcRequestsHash(requests [][]byte) common.Hash {

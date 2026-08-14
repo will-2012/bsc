@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -634,11 +635,6 @@ func (p *Parlia) VerifyUnsealedHeader(chain consensus.ChainHeaderReader, header 
 		}
 	}
 
-	// Ensure that the block doesn't contain any uncles which are meaningless in PoA
-	if header.UncleHash != types.EmptyUncleHash {
-		return errInvalidUncleHash
-	}
-
 	bohr := chain.Config().IsBohr(header.Number, header.Time)
 	if !bohr {
 		if header.ParentBeaconRoot != nil {
@@ -701,6 +697,17 @@ func (p *Parlia) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 
 	parent, err := p.getParent(chain, header, parents)
 	if err != nil {
+		return err
+	}
+
+	// From Jenner+1, UncleHash carries the BEP-703 commitment (3.5.2) instead of EmptyUncleHash.
+	if !chain.Config().IsJenner(parent.Number, parent.Time) {
+		if header.UncleHash != types.EmptyUncleHash {
+			return errInvalidUncleHash
+		}
+	} else if c, err := paymentlane.Decode(header.UncleHash); err != nil {
+		return err
+	} else if err := c.CheckHeaderBounds(header.GasUsed, header.GasLimit); err != nil {
 		return err
 	}
 

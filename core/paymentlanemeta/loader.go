@@ -1,0 +1,108 @@
+package paymentlanemeta
+
+import (
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/paymentlane"
+	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
+)
+
+// LoadMeta reads the parent-pinned lane params and payment-contract membership through the
+// PaymentLane getters, while keeping those reads on the StateDB witness-visible path.
+func LoadMeta(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (Meta, error) {
+	params, err := loadParamsFromStateDB(config, header, statedb)
+	if err != nil {
+		return Meta{}, err
+	}
+	listed, err := loadListedFromStateDB(config, header, statedb)
+	if err != nil {
+		return Meta{}, err
+	}
+	return Meta{Params: params, Listed: listed}, nil
+}
+
+// LoadParamsForQuota reads only the params needed for lane-size verification from a StateDB
+// that is already opened on the parent post-state root.
+func LoadParamsForQuota(config *params.ChainConfig, parent, header *types.Header, statedb *state.StateDB) (paymentlane.Params, error) {
+	return loadParamsFromParentState(config, parent, header, statedb)
+}
+
+func loadParamsFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (paymentlane.Params, error) {
+	ret, err := callFromStateDB(config, header, statedb, encodeGetPaymentLaneParams())
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	return decodeParams(ret)
+}
+
+func loadParamsFromParentState(config *params.ChainConfig, parent, header *types.Header, statedb *state.StateDB) (paymentlane.Params, error) {
+	ret, err := callFromParentState(config, parent, header, statedb, encodeGetPaymentLaneParams())
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	return decodeParams(ret)
+}
+
+func loadListedFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (map[common.Address]struct{}, error) {
+	ret, err := callFromStateDB(config, header, statedb, encodeGetPaymentContracts(0, pageSize))
+	if err != nil {
+		return nil, err
+	}
+	page, total, err := decodeContractsPage(ret)
+	if err != nil {
+		return nil, err
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	if len(page) == 0 {
+		return nil, fmt.Errorf("%w: getPaymentContracts returned an empty first page for totalLength %d", paymentlane.ErrCorruptConfig, total)
+	}
+	listed := make(map[common.Address]struct{})
+	if err := appendPage(listed, 0, page, total); err != nil {
+		return nil, err
+	}
+	for offset := uint64(len(page)); offset < total; {
+		ret, err := callFromStateDB(config, header, statedb, encodeGetPaymentContracts(offset, pageSize))
+		if err != nil {
+			return nil, err
+		}
+		page, nextTotal, err := decodeContractsPage(ret)
+		if err != nil {
+			return nil, err
+		}
+		if nextTotal != total {
+			return nil, fmt.Errorf("%w: getPaymentContracts totalLength changed from %d to %d", paymentlane.ErrCorruptConfig, total, nextTotal)
+		}
+		if len(page) == 0 {
+			return nil, fmt.Errorf("%w: getPaymentContracts returned an empty page at offset %d of %d", paymentlane.ErrCorruptConfig, offset, total)
+		}
+		if err := appendPage(listed, offset, page, total); err != nil {
+			return nil, err
+		}
+		offset += uint64(len(page))
+	}
+	if uint64(len(listed)) != total {
+		return nil, fmt.Errorf("%w: listed set size %d, want %d", paymentlane.ErrCorruptConfig, len(listed), total)
+	}
+	return listed, nil
+}
+
+func appendPage(listed map[common.Address]struct{}, offset uint64, page []common.Address, total uint64) error {
+	if offset > total {
+		return fmt.Errorf("%w: page offset %d exceeds totalLength %d", paymentlane.ErrCorruptConfig, offset, total)
+	}
+	if offset+uint64(len(page)) > total {
+		return fmt.Errorf("%w: page offset %d length %d exceeds totalLength %d", paymentlane.ErrCorruptConfig, offset, len(page), total)
+	}
+	for i, addr := range page {
+		if _, dup := listed[addr]; dup {
+			return fmt.Errorf("%w: getPaymentContracts duplicate %x at %d", paymentlane.ErrCorruptConfig, addr, offset+uint64(i))
+		}
+		listed[addr] = struct{}{}
+	}
+	return nil
+}

@@ -1,95 +1,141 @@
 package paymentlanemeta
 
 import (
-	"encoding/binary"
+	_ "embed"
 	"fmt"
+	"math/big"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/paymentlane"
 )
 
-var (
-	getPaymentLaneParamsSelector = [4]byte{0xff, 0x62, 0x01, 0x47}
-	getPaymentContractsSelector  = [4]byte{0x08, 0xfc, 0xc4, 0x5a}
+const (
+	getPaymentLaneParamsMethod = "getPaymentLaneParams"
+	getPaymentContractsMethod  = "getPaymentContracts"
 )
 
-func encodeGetPaymentLaneParams() []byte {
-	return getPaymentLaneParamsSelector[:]
+// Refresh payment_lane_meta.abi.json from the contract repo with:
+// forge inspect contracts/interface/0.8.x/IPaymentLaneMeta.sol:IPaymentLaneMeta abi --json
+//
+//go:embed payment_lane_meta.abi.json
+var paymentLaneMetaABIJSON string
+
+var paymentLaneMetaABI = mustParsePaymentLaneMetaABI()
+
+type paymentLaneMetaParams struct {
+	PaymentLaneMinRatio *big.Int
+	PaymentLaneMaxRatio *big.Int
+	ExpandTriggerRatio  *big.Int
+	ShrinkTriggerRatio  *big.Int
+	ExpandStepRatio     *big.Int
+	ShrinkStepRatio     *big.Int
+	PaymentLaneMin      *big.Int
+	PaymentLaneMax      *big.Int
 }
 
-func encodeGetPaymentContracts(offset, limit uint64) []byte {
-	input := make([]byte, 4+32+32)
-	copy(input, getPaymentContractsSelector[:])
-	binary.BigEndian.PutUint64(input[4+24:4+32], offset)
-	binary.BigEndian.PutUint64(input[4+32+24:4+64], limit)
+func mustParsePaymentLaneMetaABI() abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(paymentLaneMetaABIJSON))
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
+
+func mustPack(name string, args ...interface{}) []byte {
+	input, err := paymentLaneMetaABI.Pack(name, args...)
+	if err != nil {
+		panic(err)
+	}
 	return input
 }
 
-func decodeParams(ret []byte) (paymentlane.Params, error) {
-	if len(ret) != 8*32 {
-		return paymentlane.Params{}, fmt.Errorf("%w: getPaymentLaneParams returned %d bytes", paymentlane.ErrCorruptConfig, len(ret))
+func packGetPaymentLaneParams() []byte {
+	return mustPack(getPaymentLaneParamsMethod)
+}
+
+func packGetPaymentContracts(offset, limit uint64) []byte {
+	return mustPack(getPaymentContractsMethod, new(big.Int).SetUint64(offset), new(big.Int).SetUint64(limit))
+}
+
+func unpackGetPaymentLaneParams(ret []byte) (paymentlane.Params, error) {
+	values, err := paymentLaneMetaABI.Unpack(getPaymentLaneParamsMethod, ret)
+	if err != nil {
+		return paymentlane.Params{}, fmt.Errorf("%w: %s: %v", paymentlane.ErrCorruptConfig, getPaymentLaneParamsMethod, err)
 	}
-	words := make([]uint64, 8)
-	for i := range words {
-		v, ok := decodeWord64(ret[i*32 : (i+1)*32])
-		if !ok {
-			return paymentlane.Params{}, fmt.Errorf("%w: getPaymentLaneParams word %d overflows uint64", paymentlane.ErrCorruptConfig, i)
-		}
-		words[i] = v
+	if len(values) != 1 {
+		return paymentlane.Params{}, unexpectedOutputCount(getPaymentLaneParamsMethod, len(values), 1)
+	}
+	params := *abi.ConvertType(values[0], new(paymentLaneMetaParams)).(*paymentLaneMetaParams)
+	minRatio, err := parseUint64("getPaymentLaneParams.paymentLaneMinRatio", params.PaymentLaneMinRatio)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	maxRatio, err := parseUint64("getPaymentLaneParams.paymentLaneMaxRatio", params.PaymentLaneMaxRatio)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	expandTrigger, err := parseUint64("getPaymentLaneParams.expandTriggerRatio", params.ExpandTriggerRatio)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	shrinkTrigger, err := parseUint64("getPaymentLaneParams.shrinkTriggerRatio", params.ShrinkTriggerRatio)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	expandStep, err := parseUint64("getPaymentLaneParams.expandStepRatio", params.ExpandStepRatio)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	shrinkStep, err := parseUint64("getPaymentLaneParams.shrinkStepRatio", params.ShrinkStepRatio)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	minGas, err := parseUint64("getPaymentLaneParams.paymentLaneMin", params.PaymentLaneMin)
+	if err != nil {
+		return paymentlane.Params{}, err
+	}
+	maxGas, err := parseUint64("getPaymentLaneParams.paymentLaneMax", params.PaymentLaneMax)
+	if err != nil {
+		return paymentlane.Params{}, err
 	}
 	return paymentlane.Params{
-		MinRatio:      words[0],
-		MaxRatio:      words[1],
-		ExpandTrigger: words[2],
-		ShrinkTrigger: words[3],
-		ExpandStep:    words[4],
-		ShrinkStep:    words[5],
-		MinGas:        words[6],
-		MaxGas:        words[7],
+		MinRatio:      minRatio,
+		MaxRatio:      maxRatio,
+		ExpandTrigger: expandTrigger,
+		ShrinkTrigger: shrinkTrigger,
+		ExpandStep:    expandStep,
+		ShrinkStep:    shrinkStep,
+		MinGas:        minGas,
+		MaxGas:        maxGas,
 	}, nil
 }
 
-func decodeContractsPage(ret []byte) ([]common.Address, uint64, error) {
-	if len(ret) < 96 {
-		return nil, 0, fmt.Errorf("%w: getPaymentContracts returned %d bytes", paymentlane.ErrCorruptConfig, len(ret))
+func unpackGetPaymentContracts(ret []byte) ([]common.Address, uint64, error) {
+	values, err := paymentLaneMetaABI.Unpack(getPaymentContractsMethod, ret)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %s: %v", paymentlane.ErrCorruptConfig, getPaymentContractsMethod, err)
 	}
-	offset, ok := decodeWord64(ret[:32])
-	if !ok || offset != 64 {
-		return nil, 0, fmt.Errorf("%w: getPaymentContracts offset = %#x", paymentlane.ErrCorruptConfig, ret[:32])
+	if len(values) != 2 {
+		return nil, 0, unexpectedOutputCount(getPaymentContractsMethod, len(values), 2)
 	}
-	total, ok := decodeWord64(ret[32:64])
-	if !ok {
-		return nil, 0, fmt.Errorf("%w: getPaymentContracts totalLength = %#x", paymentlane.ErrCorruptConfig, ret[32:64])
+	paymentContracts := *abi.ConvertType(values[0], new([]common.Address)).(*[]common.Address)
+	totalLength := *abi.ConvertType(values[1], new(*big.Int)).(**big.Int)
+	total, err := parseUint64("getPaymentContracts.totalLength", totalLength)
+	if err != nil {
+		return nil, 0, err
 	}
-	count, ok := decodeWord64(ret[64:96])
-	if !ok {
-		return nil, 0, fmt.Errorf("%w: getPaymentContracts page length = %#x", paymentlane.ErrCorruptConfig, ret[64:96])
-	}
-	wantLen := 96 + int(count)*32
-	if len(ret) != wantLen {
-		return nil, 0, fmt.Errorf("%w: getPaymentContracts length = %d, want %d", paymentlane.ErrCorruptConfig, len(ret), wantLen)
-	}
-	page := make([]common.Address, count)
-	for i := uint64(0); i < count; i++ {
-		word := ret[96+i*32 : 128+i*32]
-		for _, b := range word[:12] {
-			if b != 0 {
-				return nil, 0, fmt.Errorf("%w: getPaymentContracts[%d] = %#x", paymentlane.ErrCorruptConfig, i, word)
-			}
-		}
-		page[i] = common.BytesToAddress(word[12:])
-	}
-	return page, total, nil
+	return paymentContracts, total, nil
 }
 
-func decodeWord64(word []byte) (uint64, bool) {
-	if len(word) != 32 {
-		return 0, false
+func unexpectedOutputCount(method string, got, want int) error {
+	return fmt.Errorf("%w: %s returned %d values, want %d", paymentlane.ErrCorruptConfig, method, got, want)
+}
+
+func parseUint64(name string, v *big.Int) (uint64, error) {
+	if v == nil || !v.IsUint64() {
+		return 0, fmt.Errorf("%w: %s does not fit uint64: %v", paymentlane.ErrCorruptConfig, name, v)
 	}
-	for _, b := range word[:24] {
-		if b != 0 {
-			return 0, false
-		}
-	}
-	return binary.BigEndian.Uint64(word[24:32]), true
+	return v.Uint64(), nil
 }

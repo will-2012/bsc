@@ -48,27 +48,27 @@ func LoadParamsForQuota(config *params.ChainConfig, parent, header *types.Header
 }
 
 func loadParamsFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (paymentlane.Params, error) {
-	ret, err := callFromStateDB(config, header, statedb, encodeGetPaymentLaneParams())
+	ret, err := callFromStateDB(config, header, statedb, packGetPaymentLaneParams())
 	if err != nil {
 		return paymentlane.Params{}, err
 	}
-	return decodeParams(ret)
+	return unpackGetPaymentLaneParams(ret)
 }
 
 func loadParamsFromParentState(config *params.ChainConfig, parent, header *types.Header, statedb *state.StateDB) (paymentlane.Params, error) {
-	ret, err := callFromParentState(config, parent, header, statedb, encodeGetPaymentLaneParams())
+	ret, err := callFromParentState(config, parent, header, statedb, packGetPaymentLaneParams())
 	if err != nil {
 		return paymentlane.Params{}, err
 	}
-	return decodeParams(ret)
+	return unpackGetPaymentLaneParams(ret)
 }
 
 func loadListedFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (map[common.Address]struct{}, error) {
-	ret, err := callFromStateDB(config, header, statedb, encodeGetPaymentContracts(0, pageSize))
+	ret, err := callFromStateDB(config, header, statedb, packGetPaymentContracts(0, pageSize))
 	if err != nil {
 		return nil, err
 	}
-	page, total, err := decodeContractsPage(ret)
+	page, total, err := unpackGetPaymentContracts(ret)
 	if err != nil {
 		return nil, err
 	}
@@ -83,11 +83,11 @@ func loadListedFromStateDB(config *params.ChainConfig, header *types.Header, sta
 		return nil, err
 	}
 	for offset := uint64(len(page)); offset < total; {
-		ret, err := callFromStateDB(config, header, statedb, encodeGetPaymentContracts(offset, pageSize))
+		ret, err := callFromStateDB(config, header, statedb, packGetPaymentContracts(offset, pageSize))
 		if err != nil {
 			return nil, err
 		}
-		page, nextTotal, err := decodeContractsPage(ret)
+		page, nextTotal, err := unpackGetPaymentContracts(ret)
 		if err != nil {
 			return nil, err
 		}

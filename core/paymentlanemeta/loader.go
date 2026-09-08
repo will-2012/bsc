@@ -17,7 +17,7 @@ var loadMetaCache metaCache
 
 // LoadMeta returns parent-pinned lane metadata, reading it through the PaymentLane getters on a
 // miss. The cache key is 0x2007's account in the supplied StateDB, so callers MUST pass a block
-// state still opened on the parent root and not yet advanced by execution.
+// state of the parent block post-execution.
 func LoadMeta(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (*Meta, error) {
 	cacheable := canCacheMeta(statedb)
 	if err := statedb.Error(); err != nil {
@@ -45,7 +45,7 @@ func LoadMeta(config *params.ChainConfig, header *types.Header, statedb *state.S
 func loadMetaFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (*Meta, error) {
 	start := time.Now()
 
-	governanceParams, err := loadGovernanceParamsFromStateDB(config, header, statedb)
+	ratio, err := loadRatioFromStateDB(config, header, statedb)
 	if err != nil {
 		return nil, err
 	}
@@ -53,34 +53,20 @@ func loadMetaFromStateDB(config *params.ChainConfig, header *types.Header, state
 	if err != nil {
 		return nil, err
 	}
-	log.Info("Loaded payment lane metadata", "elapsed", time.Since(start), "listed", len(listed))
-	return &Meta{governanceParams: governanceParams, listed: listed}, nil
+	log.Info("Loaded payment lane metadata", "elapsed", time.Since(start), "ratio", ratio, "listed", len(listed))
+	return &Meta{ratio: ratio, listed: listed}, nil
 }
 
-// LoadGovernanceParamsForQuota reads only the governance params needed for lane-quota verification
-// from a StateDB that is already opened on the parent post-state root.
-func LoadGovernanceParamsForQuota(config *params.ChainConfig, parent, header *types.Header, statedb *state.StateDB) (paymentlane.GovernanceParams, error) {
-	return loadGovernanceParamsFromParentState(config, parent, header, statedb)
-}
-
-func loadGovernanceParamsFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (paymentlane.GovernanceParams, error) {
-	ret, err := callFromStateDB(config, header, statedb, packGetPaymentLaneParams())
+func loadRatioFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (uint64, error) {
+	ret, err := callGetter(config, header, statedb, packGetPaymentLaneRatio())
 	if err != nil {
-		return paymentlane.GovernanceParams{}, err
+		return 0, err
 	}
-	return unpackGetPaymentLaneParams(ret)
-}
-
-func loadGovernanceParamsFromParentState(config *params.ChainConfig, parent, header *types.Header, statedb *state.StateDB) (paymentlane.GovernanceParams, error) {
-	ret, err := callFromParentState(config, parent, header, statedb, packGetPaymentLaneParams())
-	if err != nil {
-		return paymentlane.GovernanceParams{}, err
-	}
-	return unpackGetPaymentLaneParams(ret)
+	return unpackGetPaymentLaneRatio(ret)
 }
 
 func loadListedFromStateDB(config *params.ChainConfig, header *types.Header, statedb *state.StateDB) (map[common.Address]struct{}, error) {
-	ret, err := callFromStateDB(config, header, statedb, packGetPaymentContracts(0, pageSize))
+	ret, err := callGetter(config, header, statedb, packGetPaymentContracts(0, pageSize))
 	if err != nil {
 		return nil, err
 	}
@@ -88,8 +74,8 @@ func loadListedFromStateDB(config *params.ChainConfig, header *types.Header, sta
 	if err != nil {
 		return nil, err
 	}
-	if total > maxListedContracts {
-		return nil, fmt.Errorf("%w: getPaymentContracts totalLength %d exceeds limit %d", paymentlane.ErrCorruptConfig, total, maxListedContracts)
+	if total > paymentlane.MaxListedContracts {
+		return nil, fmt.Errorf("%w: getPaymentContracts totalLength %d exceeds limit %d", paymentlane.ErrCorruptConfig, total, paymentlane.MaxListedContracts)
 	}
 	if total == 0 {
 		return nil, nil
@@ -102,7 +88,7 @@ func loadListedFromStateDB(config *params.ChainConfig, header *types.Header, sta
 		return nil, err
 	}
 	for offset := uint64(len(page)); offset < total; {
-		ret, err := callFromStateDB(config, header, statedb, packGetPaymentContracts(offset, pageSize))
+		ret, err := callGetter(config, header, statedb, packGetPaymentContracts(offset, pageSize))
 		if err != nil {
 			return nil, err
 		}

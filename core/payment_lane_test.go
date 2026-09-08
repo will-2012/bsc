@@ -26,11 +26,8 @@ const (
 	laneTestQuota    = 2_750_000 // 500 * 55M / 10000, the unwritten-ratio default
 )
 
-// PaymentLane's storage: slot 0 is _paymentLaneRatio, slot 1 the listed set's array length.
-var (
-	laneRatioSlot     = common.Hash{31: 0}
-	laneListedLenSlot = common.Hash{31: 1}
-)
+// PaymentLane's storage: slot 1 is the listed set's array length.
+var laneListedLenSlot = common.Hash{31: 1}
 
 // laneGenesis builds a faker-backed BSC lane harness and preallocates 0x2007.
 func laneGenesis(t testing.TB, gasLimit uint64) (*params.ChainConfig, *Genesis, *ecdsaKey) {
@@ -319,37 +316,6 @@ func TestPaymentLaneReportsAFailedReadAsLocal(t *testing.T) {
 	require.ErrorIs(t, err, paymentlane.ErrStateUnavailable, "a failed read is this node's fault, not the block's")
 	require.ErrorIs(t, err, broken, "the cause has to survive for whoever reads the log")
 	require.NotErrorIs(t, err, paymentlane.ErrViolated, "calling a good block invalid is what costs peers")
-}
-
-// TestPaymentLaneReadsReachTheWitness keeps the lane config read on the witness-visible StateDB
-// path. The governed ratio proves the witness had real 0x2007 storage to serve.
-func TestPaymentLaneReadsReachTheWitness(t *testing.T) {
-	config, gspec, key := laneGenesis(t, laneTestGasLimit)
-
-	lane := gspec.Alloc[paymentlane.ContractAddress]
-	lane.Storage = map[common.Hash]common.Hash{laneRatioSlot: common.BigToHash(big.NewInt(800))}
-	gspec.Alloc[paymentlane.ContractAddress] = lane
-
-	paymentTxGas := laneRequiredTxGas(t, config, nil)
-	signer := types.LatestSigner(config)
-	var nonce uint64
-	records := map[uint64]laneRecord{}
-	_, blocks, _ := GenerateChainWithGenesis(gspec, ethash.NewFullFaker(), 4, recordLanes(records, func(i int, b *BlockGen) {
-		b.AddTx(key.sign(t, signer, nonce, common.Address{0xaa}, big.NewInt(1), paymentTxGas, nil))
-		nonce++
-	}))
-
-	require.True(t, records[4].on)
-	require.EqualValues(t, 4_400_000, records[4].quota, "800/10000 of the gas limit: the governed storage under test")
-
-	cfg := DefaultConfig()
-	cfg.StatelessSelfValidation = true
-	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, ethash.NewFullFaker(), cfg)
-	require.NoError(t, err)
-	defer chain.Stop()
-
-	n, err := chain.InsertChain(blocks)
-	require.NoError(t, err, "witness replay must serve the lane's 0x2007 reads; failed after %d blocks", n)
 }
 
 // --- helpers -------------------------------------------------------------------

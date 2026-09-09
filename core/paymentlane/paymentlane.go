@@ -25,7 +25,7 @@ var ContractAddress = common.HexToAddress("0x00000000000000000000000000000000000
 const (
 	RatioDenom                = 10_000
 	MaxLaneRatio              = 1_000   // the lane may never exceed 10% of the gas limit
-	MaxListedContracts uint64 = 100_000 // the contract enforces it on governance writes
+	MaxListedContracts uint64 = 100_000 // protocol constant: this and the contract's move together
 )
 
 type LaneType uint8

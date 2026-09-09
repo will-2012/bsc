@@ -83,7 +83,8 @@ func laneMinerChain(t *testing.T, corruptRatio bool) (*worker, *params.ChainConf
 	}, key
 }
 
-// Lane resolution is the only makeEnv state read that can fail; it must happen before StartPrefetcher.
+// Lane resolution is the only makeEnv state read that can fail, and it runs after StartPrefetcher so
+// that a witness build records the getters; its error path must therefore stop the prefetcher itself.
 func TestMakeEnvLeavesNoPrefetcherWhenTheLaneFails(t *testing.T) {
 	w, _, parent, header, _ := laneMinerChain(t, true)
 

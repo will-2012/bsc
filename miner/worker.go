@@ -720,12 +720,16 @@ func (w *worker) makeEnv(parent *types.Header, header *types.Header, coinbase co
 			return nil, err
 		}
 	}
+	state.StartPrefetcher("miner", bundle)
 	lane, err := core.ResolveLaneState(w.chainConfig, w.engine, parent, header, state)
 	if err != nil {
+		state.StopPrefetcher()
+		paymentLaneDeclineCounter.Inc(1)
+		log.Error("Failed to mine due to payment lane unresolved", "number", header.Number,
+			"time", header.Time, "gasLimit", header.GasLimit, "parent", parent.Hash(),
+			"parentroot", parent.Root, "witness", bundle != nil, "err", err)
 		return nil, err
 	}
-
-	state.StartPrefetcher("miner", bundle)
 	// Parlia reserves gas for the system txs it applies in FinalizeAndAssemble,
 	// so user txs must leave room for them. Initialise the gas pool at
 	// GasLimit-gasReserved (rather than reserving via SubGas afterwards) so
